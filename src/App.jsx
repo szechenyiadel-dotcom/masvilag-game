@@ -1,4 +1,5 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
+import { nicknameInfo, plainNickname, stripAliasGloss } from "./nicknames.js";
 import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, bondScopeIds, sheetFields, flattenSheetValue } from "./bondClient.js";
 import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail, memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K } from "./semanticMemory.js";
 import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
@@ -3184,7 +3185,7 @@ function speakerBelongsUnder(w, speakerId, leader) {
   /* without identity data we cannot tell — never strip on a guess */
   if (!gs.size && !ds.leader) return true;
   if ([...gs].some((g) => gl.has(g))) return true;
-  const leaderNames = [leader.name, String(leader.name || "").split(/\s+/)[0], String(leader.name || "").split(/\s+/).slice(-1)[0], leader.nick].map(norm).filter((x) => x.length >= 3);
+  const leaderNames = [leader.name, String(leader.name || "").split(/\s+/)[0], String(leader.name || "").split(/\s+/).slice(-1)[0], nicknameInfo(leader.nick).name].map(norm).filter((x) => x.length >= 3);
   if (ds.leader && leaderNames.some((ln) => norm(ds.leader).includes(ln))) return true;
   const spNames = [sp.name, String(sp.name || "").split(/\s+/)[0]].map(norm).filter((x) => x.length >= 3);
   if ((dl.teammates || []).some((t) => spNames.some((sn) => norm(t).includes(sn)))) return true;
@@ -4356,7 +4357,7 @@ function findChar(w, key) {
     list.find((x) => String(x.id).toLowerCase() === k) ||
     list.find((x) => (x.username || "").toLowerCase() === k) ||
     list.find((x) => (x.name || "").toLowerCase() === k) ||
-    list.find((x) => (x.nick || "").toLowerCase() === k) ||
+    list.find((x) => nicknameInfo(x.nick).name.toLowerCase() === k) ||
     list.find((x) => (x.name || "").toLowerCase().split(" ")[0] === k);
   return hit ? hit.id : null;
 }
@@ -8121,7 +8122,7 @@ function sceneSpeechSelfThirdPerson(w, speakerId, text) {
   if (!c || isHuman(w, speakerId)) return false;
   const spoken = String(text || "").replace(/\*[^*]*\*/g, " ");
   const first = String(c.name || "").split(/\s+/)[0];
-  const names = [...new Set([first, String(c.nick || "").trim()].filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n)))];
+  const names = [...new Set([first, nicknameInfo(c.nick).name].filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n)))];
   return names.some((n) => {
     const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp("(^|[^\\p{L}])" + esc + "(?=$|[^\\p{L}])", "u");
@@ -12441,7 +12442,7 @@ function characterIdentityAliasSignature(person) {
       : String(value || "");
   return [
     person.name,
-    person.nick,
+    nicknameInfo(person.nick).name,
     person.nickname,
     flat(person.aliases),
     person.alias,
@@ -12467,7 +12468,7 @@ function characterIdentityNicknameParts(person) {
   if (!person) return [];
 
   const rawValues = [
-    person.nick,
+    nicknameInfo(person.nick).name,
     person.nickname,
     person.aliases,
     person.alias,
@@ -13353,7 +13354,8 @@ function compactCharacterAgentRelationship(w, actorId, targetId) {
     targetId,
     targetName,
     targetUsername: target ? String(target.username || "") : "",
-    targetNickname: target ? String(target.nick || target.nickname || "") : "",
+    targetNickname: target ? plainNickname(target.nick || target.nickname) : "",
+    targetAlias: target ? nicknameInfo(target.nick || target.nickname).name : "",
     targetFirstName: targetWords[0] || targetName,
     score: Number(rel.score) || 0,
     label: relLabel(rel) || "",
@@ -13364,7 +13366,7 @@ function compactCharacterAgentRelationship(w, actorId, targetId) {
     ownSensei,
     preferredAddress: ownSensei
       ? preferredSenseiAddress(target)
-      : String((target && (target.nick || target.nickname)) || targetWords[0] || targetName || ""),
+      : String((target && plainNickname(target.nick || target.nickname)) || targetWords[0] || targetName || ""),
   };
 }
 
@@ -13775,7 +13777,7 @@ function recordCharacterAgentAction(w, actorId, details = {}) {
 
 function preferredSenseiAddress(character) {
   if (!character) return "";
-  const nick = String(character.nick || character.nickname || "").replace(/\s+/g, " ").trim();
+  const nick = nicknameInfo(character.nick || character.nickname).name;
   if (/^sensei\b/i.test(nick)) return nick;
   const surname = preferredTitleSurname(character) || String(character.name || "").trim();
   return surname ? `Sensei ${surname}` : "Sensei";
@@ -13846,7 +13848,7 @@ function characterAddressAliases(c) {
 
   const raw = [
     c.name,
-    c.nick,
+    nicknameInfo(c.nick).name,
     c.username,
     c.username ? `@${c.username}` : "",
     c.name
@@ -14780,10 +14782,10 @@ function sanitizeIncorrectSenseiAddress(
   const words = fullName.split(/\s+/).filter(Boolean);
   const firstName = words[0] || fullName;
   const surname = preferredTitleSurname(target);
-  const rawNick = String(target.nick || target.nickname || "").trim();
+  const rawNick = nicknameInfo(target.nick || target.nickname).name;
   const replacement = String((rawNick && !/^sensei\b/i.test(rawNick) ? rawNick : "") || firstName || fullName || "").trim();
 
-  const targetNameParts = [fullName, firstName, surname, target.username, target.nick]
+  const targetNameParts = [fullName, firstName, surname, target.username, nicknameInfo(target.nick).name]
     .map((x) => String(x || "").trim())
     .filter((x) => x.length >= 2)
     .filter((x, i, arr) => arr.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
@@ -14822,7 +14824,8 @@ function preferredDirectAddressForCharacter(w, actorId, targetId) {
   if (isOwnSenseiRelationship(w, actorId, targetId)) {
     return preferredSenseiAddress(target);
   }
-  const nick = String(target.nick || target.nickname || "").replace(/\s+/g, " ").trim();
+  /* A nickname with a note ("Dagger (hero name, not everyone uses)") is not everybody's way to address them: first name. */
+  const nick = plainNickname(target.nick || target.nickname);
   if (nick) return nick;
   const full = String(target.name || "").replace(/\s+/g, " ").trim();
   return full.split(/\s+/).filter(Boolean)[0] || full;
@@ -14877,7 +14880,7 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
     actorFirstName,
     actorLastName,
     actorSurname,
-    actor.nick,
+    nicknameInfo(actor.nick).name,
     actor.nickname,
     actor.username,
     actor.username ? `@${actor.username}` : "",
@@ -14894,7 +14897,7 @@ function sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, value) {
       targetNameWords[0] || "",
       targetNameWords.length > 1 ? targetNameWords[targetNameWords.length - 1] : "",
       target ? preferredTitleSurname(target) : "",
-      target && target.nick,
+      target && nicknameInfo(target.nick).name,
       target && target.nickname,
       target && target.username,
       target && target.username ? `@${target.username}` : "",
@@ -14972,7 +14975,7 @@ function directAddressAliasesForCharacter(c) {
     words[0] || "",
     words.length > 1 ? words[words.length - 1] : "",
     preferredTitleSurname(c) || "",
-    c.nick,
+    nicknameInfo(c.nick).name,
     c.nickname,
     c.username,
     c.username ? `@${c.username}` : "",
@@ -15047,7 +15050,9 @@ function normalizePreferredNicknameVocative(w, actorId, targetId, value) {
   const target = charById(w, targetId);
   if (!target || isOwnSenseiRelationship(w, actorId, targetId)) return text;
 
-  const nickname = String(target.nick || target.nickname || "").replace(/\s+/g, " ").trim();
+  /* Only a plain nickname is forced onto every direct address; one with a note (a hero name "not everyone uses") is used by
+     the people whose sheets say so, and the model decides who that is. */
+  const nickname = plainNickname(target.nick || target.nickname);
   if (!nickname) return text;
 
   const fullName = String(target.name || "").replace(/\s+/g, " ").trim();
@@ -15073,7 +15078,9 @@ function normalizePreferredNicknameVocative(w, actorId, targetId, value) {
 }
 
 function sanitizeGeneratedDirectAddress(w, actorId, targetId, value) {
-  let text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, value);
+  /* No "(her hero name)" notes and no "Tandy, Dagger" stacks in anything a character says. */
+  let text = stripAliasGloss(value, w ? allSubjects(w) : []);
+  text = sanitizeIncorrectSenseiAddress(w, actorId, targetId, text);
   text = sanitizeSelfAliasUsedAsTargetVocative(w, actorId, targetId, text);
   text = sanitizeWrongCharacterVocative(w, actorId, targetId, text);
   text = normalizePreferredNicknameVocative(w, actorId, targetId, text);
@@ -49366,7 +49373,7 @@ function romanticEventParticipantIds(w, event) {
     if (!c) return;
     const full = String(c.name || "").trim().toLowerCase();
     const first = full.split(/\s+/)[0] || "";
-    const nick = String(c.nick || c.nickname || "").trim().toLowerCase();
+    const nick = nicknameInfo(c.nick || c.nickname).name.toLowerCase();
     const handle = String(c.username || "").trim().toLowerCase();
     const aliases = [full, nick, handle ? `@${handle}` : "", first]
       .filter((x) => x && x.length >= 3);
@@ -62388,7 +62395,7 @@ function fullSpecScheduleIgnoredAndTagDms(w, event) {
     let tagged = 0;
     (w.chars || []).forEach((c) => {
       if (!c || !c.id || tagged >= 2 || alreadyWriting.has(String(c.id)) || isHuman(w, c.id) || isMediaAccount(w, c.id)) return;
-      const handles = [c.username, c.nick, String(c.name || "").split(/\s+/)[0], c.name].map((x) => String(x || "").trim().toLowerCase()).filter((x) => x.length >= 3);
+      const handles = [c.username, nicknameInfo(c.nick).name, String(c.name || "").split(/\s+/)[0], c.name].map((x) => String(x || "").trim().toLowerCase()).filter((x) => x.length >= 3);
       if (!handles.some((h) => low.includes("@" + h) || low.includes("@" + h.replace(/\s+/g, "")))) return;
       const rel = getRel(w, c.id, actor) || EMPTY_REL;
       if (Math.abs(Number(rel.score) || 0) < 15 && !groundedFollowBackPersonalityEligible(w, c.id, actor)) return;
@@ -62691,7 +62698,7 @@ function generatedSocialTextSanityProblem(w, actorId, text, card) {
   try { if (w && w.meId && stripInventedSharedPast(w, actorId, value, [w.meId]) !== value) return "invented-shared-past"; } catch (error) { /* ignore */ }
   /* every capitalised part of the own name (handles "Park Nam-gyu" as well as "Brent LaRusso");
      case-sensitive, so "the park" is not mistaken for "Park" */
-  const names = [...String(actor.name || "").split(/\s+/), String(actor.nick || "").trim()]
+  const names = [...String(actor.name || "").split(/\s+/), nicknameInfo(actor.nick).name]
     .filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n));
   const low = value.toLowerCase();
   for (const n of [...new Set(names)]) {
@@ -63987,7 +63994,7 @@ function identityCanonFor(w, id) {
 function identityNameMatches(text, person) {
   const hay = String(text || "").toLowerCase();
   if (!hay || !person) return false;
-  const names = [person.name, person.nick, person.username]
+  const names = [person.name, nicknameInfo(person.nick).name, person.username]
     .map((x) => String(x || "").trim().toLowerCase())
     .filter(Boolean);
   const first = String(person.name || "").trim().split(/\s+/)[0].toLowerCase();
@@ -64049,8 +64056,14 @@ function identityCanonLine(w, c) {
   if (d.children) bits.push((en ? "children: " : "gyerekek: ") + d.children);
   if (d.age) bits.push((en ? "age: " : "kor: ") + d.age);
   const who = c.name + " [" + c.id + "]" + (isHuman(w, c.id) ? (en ? " — PLAYER" : " — JÁTÉKOS") : "");
+  const nickInfo = nicknameInfo(c.nick);
   const call = isHuman(w, c.id)
-    ? (en ? (pronouns === "she/her" ? " · call her: " : pronouns === "he/him" ? " · call him: " : " · call them: ") : " · így szólítsák: ") + (String(c.nick || "").trim() || String(c.name || "").split(/\s+/)[0])
+    ? (en ? (pronouns === "she/her" ? " · call her: " : pronouns === "he/him" ? " · call him: " : " · call them: ") : " · így szólítsák: ") + ((nickInfo.plain && nickInfo.name) || String(c.name || "").split(/\s+/)[0]) +
+      (nickInfo.name && !nickInfo.plain
+        ? (en
+          ? " · alias \"" + nickInfo.name + "\" (private note, never write it out: " + nickInfo.note + ") — only a speaker whose own sheet or card shows they know and use that name says it, as a plain name and never explained or in brackets; everyone else says " + (String(c.name || "").split(/\s+/)[0])
+          : " · alias \"" + nickInfo.name + "\" (privát megjegyzés, soha ne írd ki: " + nickInfo.note + ") — csak az mondja, akinek a saját lapja/kártyája szerint ismeri és használja ezt a nevet, sima névként, magyarázat és zárójel nélkül; mindenki más így szólítja: " + (String(c.name || "").split(/\s+/)[0]))
+        : "")
     : "";
   if (!d.oneLine && bits.length <= (pronouns ? 1 : 0) && !call) return pronouns ? "- " + who + " · " + bits.join(" · ") : "";
   return "- " + who + (d.oneLine ? " — " + d.oneLine : "") + (bits.length ? " · " + bits.join(" · ") : "") + call;
@@ -64574,7 +64587,7 @@ function groupChatSocialTail(w, aiIds, move = null) {
   const en = worldLanguage(w, w.meId) === "en";
   const ids = [...new Set((aiIds || []).filter(Boolean).map(String))].filter((id) => charById(w, id) && !isHuman(w, id)).slice(0, 7);
   const player = w.player || charById(w, w.meId) || {};
-  const playerCall = String(player.nick || "").trim() || String(player.name || "").split(/\s+/)[0];
+  const playerCall = plainNickname(player.nick) || String(player.name || "").split(/\s+/)[0];
   const relLine = (a, b) => {
     const r = getRel(w, a, b) || EMPTY_REL;
     const bond = r.bond || r.type ? localizedBond(r.bond || r.type, en ? "en" : "hu") : (en ? "no special bond" : "nincs külön kötelék");

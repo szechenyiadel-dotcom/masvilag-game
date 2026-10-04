@@ -5429,9 +5429,10 @@ function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
 
 function prepareAIRequestBody(body, priority, source) {
   /* A prompt that carries the bond context of the people it is about keeps its whole text only for a DM and a group chat
-     (the client budgets those itself). Every other kind of call is shortened like any other request, around the bond
-     context, the voice cards and the newest beat, which preservePromptEdges never cuts: without a cap here a comment or a
-     post went out at 150-390k characters and the free models answered it with timeouts. */
+     (the client budgets those itself). For every other kind of call the PROMPT is shortened around the bond context, the
+     voice cards and the newest beat, which preservePromptEdges never cuts; the system (the rulebook and the social policy
+     with the nickname, knowledge and tone rules) is never cut. Without a cap a comment or a post went out at 150-390k
+     characters and the free models answered it with timeouts. */
   const bonded = (body.messages || []).some(item => extractText(item.content || "").includes("[[FULL_BOND_CONTEXT]]"));
   if (bonded && (source === "dm" || source === "group-chat")) return body;
   let system = String(body?.system || "");
@@ -5449,7 +5450,7 @@ function prepareAIRequestBody(body, priority, source) {
     : source === "dm"
       ? 12000
       : bonded
-        ? (liveScene || source === "scene" ? 80000 : (priority >= 50 ? 30000 : 22000))
+        ? Number.MAX_SAFE_INTEGER   /* the rulebook and the social policy (the nickname, knowledge and tone rules) travel whole */
         : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
   /* R70: one-time deep Gemini sheet reads must receive the complete raw sheet.
      This exemption applies ONLY to sheet-summary / character-bible. */
