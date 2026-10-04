@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fetch from "node-fetch";
+import { geminiModelConfig } from "./aiPolicy.js";
 import {
   BOND_ANALYSIS_VERSION, ProfileSchema, BondArraySchema, EXTRACT_PROMPT, BASELINE_PROMPT,
   validateProfile, validateBonds, buildGroupIndex, reconcileFacts, resolveProfileReferences,
@@ -42,10 +43,53 @@ function uniqueValues(values) {
 // the job waits and retries later. Paid capacity (GEMINI_API_KEY, OpenAI) is opt-in.
 const allowPaid = (env) => String(env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
 
+const FREE_GEMINI_SLOTS = ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8"];
+
+/* The free Gemini keys (plus the paid one only on opt-in), the starting key rotated so jobs that run side by side
+   do not all begin on the same one. */
+function geminiKeySlots(env, semanticStartOffset = 0) {
+  const slots = [];
+  const seen = new Set();
+  for (const keySlot of FREE_GEMINI_SLOTS) {
+    const key = env[keySlot];
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    slots.push(keySlot);
+  }
+  const offset = slots.length ? ((Number(semanticStartOffset) || 0) % slots.length + slots.length) % slots.length : 0;
+  const rotated = slots.length ? [...slots.slice(offset), ...slots.slice(0, offset)] : [];
+  return [...rotated, ...(allowPaid(env) && env.GEMINI_API_KEY && !seen.has(env.GEMINI_API_KEY) ? ["GEMINI_API_KEY"] : [])];
+}
+
+/* Model by model, each on every key: the best model is tried on all keys before the next one is. A model that
+   is overloaded or out of quota is skipped on the other keys by the shared ledger instead of being asked again. */
+function geminiCandidates(env, models, semanticStartOffset = 0) {
+  const keySlots = geminiKeySlots(env, semanticStartOffset);
+  const candidates = [];
+  for (const model of models) {
+    for (const keySlot of keySlots) {
+      candidates.push({
+        name: "gemini",
+        model,
+        key: env[keySlot],
+        keySlot,
+        contextWindow: Number(env.GEMINI_ANALYSIS_CONTEXT_WINDOW),
+        outputLimit: Number(env.GEMINI_ANALYSIS_OUTPUT_LIMIT),
+      });
+    }
+  }
+  return candidates;
+}
+
 function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
   const candidates = [];
 
   if (mode === "schema") {
+    /* Normalising an answer is light work: the light Gemini models on the free keys first (Groq's free
+       tier is too small for the original answer plus the source, a 413), Groq after them. */
+    const config = geminiModelConfig(env);
+    candidates.push(...geminiCandidates(env, uniqueValues([...config.lite, ...config.extra]), semanticStartOffset));
+
     const models = uniqueValues([env.GROQ_ANALYSIS_MODEL, env.GROQ_MODEL]);
     const keySlots = ["GROQ_API_KEY", "GROQ_API_KEY_2"];
     const seenKeys = new Set();
@@ -77,50 +121,13 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
     return candidates;
   }
 
-  const models = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
-  const freeSlots = [
-    "GEMINI_API_KEY_2",
-    "GEMINI_API_KEY_3",
-    "GEMINI_API_KEY_4",
-    "GEMINI_API_KEY_5",
-    "GEMINI_API_KEY_6",
-    "GEMINI_API_KEY_7",
-    "GEMINI_API_KEY_8",
-  ];
-  const configuredFreeSlots = [];
-  const configuredFreeKeys = new Set();
-
-  for (const keySlot of freeSlots) {
-    const key = env[keySlot];
-    if (!key || configuredFreeKeys.has(key)) continue;
-    configuredFreeKeys.add(key);
-    configuredFreeSlots.push(keySlot);
-  }
-
-  const offset = configuredFreeSlots.length
-    ? ((Number(semanticStartOffset) || 0) % configuredFreeSlots.length + configuredFreeSlots.length) % configuredFreeSlots.length
-    : 0;
-  const rotatedFreeSlots = configuredFreeSlots.length
-    ? [...configuredFreeSlots.slice(offset), ...configuredFreeSlots.slice(0, offset)]
-    : [];
-  const keySlots = [...rotatedFreeSlots, ...(allowPaid(env) ? ["GEMINI_API_KEY"] : [])];
-  const seenKeys = new Set();
-
-  for (const keySlot of keySlots) {
-    const key = env[keySlot];
-    if (!key || seenKeys.has(key)) continue;
-    seenKeys.add(key);
-    for (const model of models) {
-      candidates.push({
-        name: "gemini",
-        model,
-        key,
-        keySlot,
-        contextWindow: Number(env.GEMINI_ANALYSIS_CONTEXT_WINDOW),
-        outputLimit: Number(env.GEMINI_ANALYSIS_OUTPUT_LIMIT),
-      });
-    }
-  }
+  /* The models the owner chose, then the other full models (one of them is almost always up when another is
+     overloaded: a 503 "high demand" is about a model, not a key), then the light ones as the last resort. The
+     validators check every answer, so a weaker model can only help, never slip a bad reading through. */
+  const chosen = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
+  const config = geminiModelConfig(env);
+  const models = chosen.length ? uniqueValues([...chosen, ...config.extra, ...config.lite]) : [];
+  candidates.push(...geminiCandidates(env, models, semanticStartOffset));
 
   if (env.OPENAI_API_KEY && allowPaid(env)) {
     candidates.push({
@@ -214,7 +221,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
           responseMimeType: "application/json",
           responseJsonSchema: schema,
           maxOutputTokens: outputTokens,
-          thinkingConfig: { thinkingLevel: "HIGH" },
+          thinkingConfig: { thinkingLevel: mode === "schema" ? "LOW" : "HIGH" },
         },
       }),
     });
