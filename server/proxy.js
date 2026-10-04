@@ -26,6 +26,7 @@ import {
   requestExpectsJson,
   PAID_INPUT_PROVIDERS,
   paidMaxInputChars,
+  paidCeilingFor,
   planCharBudget,
   createUsageMeter,
   createRefusalTracker,
@@ -5105,7 +5106,8 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
      character-fidelity block and the protected tail are never cut, see preservePromptEdges). */
   if (PAID_INPUT_PROVIDERS.has(provider) && PAID_MAX_INPUT_CHARS > 0) {
     const size = groqRequestSize(body);
-    const budget = planCharBudget({ maxChars: PAID_MAX_INPUT_CHARS, systemChars: size.systemChars, messageChars: size.messageChars });
+    const ceiling = paidCeilingFor(body?.source, PAID_MAX_INPUT_CHARS);
+    const budget = planCharBudget({ maxChars: ceiling, systemChars: size.systemChars, messageChars: size.messageChars });
     if (budget.compact) {
       const rows = Array.isArray(body.messages) ? body.messages : [];
       providerBody = {
@@ -5116,7 +5118,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
           content: preservePromptEdges(extractText(item?.content || ""), index === rows.length - 1 ? budget.lastCap : budget.otherCap),
         })),
       };
-      console.info("[ai-provider] paid-trim", `provider=${provider}`, `source=${String(body?.source || "unknown")}`, `before=${aiRequestChars(body)}`, `after=${aiRequestChars(providerBody)}`, `ceiling=${PAID_MAX_INPUT_CHARS}`);
+      console.info("[ai-provider] paid-trim", `provider=${provider}`, `source=${String(body?.source || "unknown")}`, `before=${aiRequestChars(body)}`, `after=${aiRequestChars(providerBody)}`, `ceiling=${ceiling}`);
     }
   }
 

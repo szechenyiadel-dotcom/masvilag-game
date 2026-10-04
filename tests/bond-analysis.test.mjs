@@ -4,7 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire } from "node:module";
 import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, sanitizeBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema, BASELINE_PROMPT } from "../src/bondAnalysis.js";
-import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
+import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondScopeIds, bondSourceFingerprint } from "../src/bondClient.js";
 import { sheetHash, analyzeStructured, generationTimeoutMs, providerCandidates } from "../server/bondAnalysis.js";
 import { createGeminiLedger } from "../server/aiPolicy.js";
 const require = createRequire(import.meta.url);
@@ -1058,4 +1058,61 @@ test("The Bonds screen can re-analyse one character without a world restart", ()
   assert.match(bonds, /Re-analyze \$\{me\.name\}'s bonds/);
   assert.match(bonds, /Re-analyze ALL bonds \(slow\)/);
   assert.ok(!/restartWorld|bondReset/.test(bonds), "no restart is involved");
+});
+
+/* ---------- the bond context of an AI call is about the characters the call is about ---------- */
+
+const contextOf = (world, scope) => JSON.parse(bondGenerationContext(world, scope).split("[[FULL_BOND_CONTEXT]]\n")[1].split("\n[[/FULL_BOND_CONTEXT]]")[0]);
+const fatWorld = () => {
+  const world = { bondAnalysis: { profiles: Object.fromEntries(profiles.map((p) => [p.id, { profile: { ...p, claims: [{ field: "names", value: p.id, evidence: "x".repeat(400) }], processedFields: ["name"], mentions: [{ targetName: "x", targetId: null, whatIsSaid: "említi", evidence: "q".repeat(500) }] } }])) }, rels: graph() };
+  for (const bond of Object.values(world.rels)) Object.assign(bond, { evidence: ["quote ".repeat(50)], fieldEvidence: [{ field: "wants", quotes: ["q".repeat(300)] }], factEvidence: [{ sheetOf: "a", quote: "f".repeat(300) }], freshFromSheet: true, fixed: false });
+  return world;
+};
+
+test("A scoped bond context holds only the characters it is about, the bonds among them and what they know of each other", () => {
+  const world = fatWorld();
+  const scoped = contextOf(world, ["ai-a", "ai-b"]);
+  assert.deepEqual(Object.keys(scoped.profiles).sort(), ["ai-a", "ai-b"]);
+  assert.deepEqual(Object.keys(scoped.currentBonds).sort(), ["ai-a>ai-b", "ai-b>ai-a"]);
+  assert.deepEqual(Object.keys(scoped.knowledgeByActor).sort(), ["ai-a", "ai-b"]);
+  for (const view of Object.values(scoped.knowledgeByActor)) for (const key of Object.keys(view)) assert.ok(["ai-a>ai-b", "ai-b>ai-a"].includes(key), key);
+  const everyone = contextOf(world, null);
+  assert.equal(Object.keys(everyone.profiles).length, ids.length, "no scope: as before, everyone");
+  assert.ok(JSON.stringify(scoped).length < JSON.stringify(everyone).length / 2, "and a lot smaller");
+});
+
+test("The context carries what a model needs, not the quotes a reading was checked against", () => {
+  const text = bondGenerationContext(fatWorld(), ["ai-a", "ai-b"]);
+  assert.ok(!text.includes("q".repeat(100)) && !text.includes("f".repeat(100)) && !text.includes("quote quote"), "no verbatim evidence");
+  const scoped = contextOf(fatWorld(), ["ai-a", "ai-b"]);
+  const profile = scoped.profiles["ai-a"];
+  assert.equal(profile.claims, undefined); assert.equal(profile.processedFields, undefined);
+  assert.equal(profile.mentions[0].whatIsSaid, "említi", "the meaning of a mention stays");
+  assert.equal(profile.mentions[0].evidence, undefined);
+  const bond = scoped.currentBonds["ai-a>ai-b"];
+  for (const key of ["evidence", "fieldEvidence", "factEvidence", "freshFromSheet", "fixed"]) assert.equal(bond[key], undefined, key);
+  assert.ok(bond.description !== undefined && bond.levels, "the bond itself stays complete");
+});
+
+test("Who a call is about: the player, the characters it names, anyone its text mentions, and nobody means everybody", () => {
+  const people = [
+    { id: "me", name: "Tandy Bowen" }, { id: "brent", name: "Brent LaRusso", nick: "Brent" },
+    { id: "ian", name: "Ian Sestero", username: "iansestero" }, { id: "eva", name: "Éva Kiss" }, { id: "zed", name: "Zed" },
+  ];
+  assert.deepEqual(bondScopeIds(people, { ids: ["brent"], playerId: "me" }).sort(), ["brent", "me"], "a DM: the player and the character");
+  assert.deepEqual(bondScopeIds(people, { ids: ["brent"], text: "I'm with Ian tonight", playerId: "me" }).sort(), ["brent", "ian", "me"], "plus the people the player's line names");
+  assert.deepEqual(bondScopeIds(people, { text: "Write a post by Éva about Brent LaRusso", playerId: "me" }).sort(), ["brent", "eva", "me"], "no list given: whoever the text names, accents or not");
+  assert.deepEqual(bondScopeIds(people, { text: "eva and ZED met", playerId: "me" }).sort(), ["eva", "me", "zed"], "other case, short names");
+  assert.equal(bondScopeIds(people, { text: "A quiet day in the town.", playerId: "me" }), null, "nobody named: the caller falls back to everyone");
+  assert.equal(bondScopeIds(people, { ids: ["ghost"], playerId: "me" }), null, "unknown ids count for nothing");
+});
+
+test("The AI calls put the scoped bond context before the protected tail, so the newest line stays last", () => {
+  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const fn = source.slice(source.indexOf("function bondContextFor(w, memory, prompt)"), source.indexOf("function bondContextFor(w, memory, prompt)") + 700);
+  assert.match(fn, /bondScopeIds\(allSubjects\(w\)/);
+  assert.match(fn, /ids\.length \? String\(memory\.query \|\| ""\) : String\(prompt \|\| ""\)/, "with a list, the latest line names the extra people; without one, the prompt does");
+  assert.match(fn, /playerId: w\.meId/);
+  assert.equal((source.match(/insertBeforeProtectedTail\(prompt, \[memoryBlock, bondContextFor\(w, memory, prompt\)\]/g) || []).length, 2, "both ask functions");
+  assert.ok(!/\) \+ bondGenerationContext\(w\)/.test(source), "nothing appends the full context after the tail any more");
 });

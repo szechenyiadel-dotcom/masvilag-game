@@ -358,15 +358,57 @@ export function installBondGraph(world, result, subjects, { reset = [] } = {}) {
   for (const key of Object.keys(world.rels)) if (!result.baselines[key]) delete world.rels[key];
 }
 
-export function bondGenerationContext(world) {
+/* What a model needs of a profile to write about a person: the structured reading without the verbatim quotes it was
+   checked against (those are for validation, and were most of its size). */
+function compactProfile(profile) {
+  if (!profile || typeof profile !== "object") return profile;
+  const { claims, processedFields, ...rest } = profile;
+  const bare = (rows) => (Array.isArray(rows) ? rows.map((row) => { if (!row || typeof row !== "object") return row; const { evidence, ...others } = row; return others; }) : rows);
+  return { ...rest, groups: bare(rest.groups), groupRelations: bare(rest.groupRelations), mentions: bare(rest.mentions), facts: bare(rest.facts), timeline: bare(rest.timeline) };
+}
+
+// Same for a bond: the quotes that proved it stay out of the prompt.
+function compactBond(bond) {
+  if (!bond || typeof bond !== "object") return bond;
+  const { evidence, fieldEvidence, factEvidence, freshFromSheet, fixed, ...rest } = bond;
+  return rest;
+}
+
+const foldForScope = (value) => String(value || "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+
+/* Who a prompt is about, when the caller did not say: the player plus every character whose name, nickname, username or
+   id the text mentions. Returns null when that is fewer than two people (the prompt names nobody in particular), so the
+   caller falls back to everyone. Being too inclusive only costs size; being too exclusive would drop a bond that matters. */
+export function bondScopeIds(people, { text = "", ids = [], playerId = null } = {}) {
+  const known = new Set(people.map((person) => person.id));
+  const chosen = new Set([...(playerId ? [playerId] : []), ...ids].filter((id) => known.has(id)));
+  const folded = foldForScope(text);
+  if (folded) {
+    for (const person of people) {
+      if (chosen.has(person.id)) continue;
+      const names = [person.name, person.nick, person.nickname, person.username, person.id].map((value) => String(value || "").trim()).filter(Boolean);
+      const tokens = names.flatMap((name) => [name, ...(name === person.name ? name.split(/\s+/).filter((part) => part.length >= 4) : [])]).map(foldForScope).filter((token) => token.length >= 3);
+      if (tokens.some((token) => folded.includes(token))) chosen.add(person.id);
+    }
+  }
+  return chosen.size >= 2 ? [...chosen] : null;
+}
+
+/* scope: ids of the characters the call is about (null = everyone). The context then holds only their profiles, the
+   bonds among them and what they know of each other, so it no longer grows with the size of the cast. */
+export function bondGenerationContext(world, scope = null) {
   if (!world.bondAnalysis) return "";
+  const keep = Array.isArray(scope) && scope.length ? new Set(scope) : null;
+  const inScope = (id) => !keep || keep.has(id);
+  const profileIds = Object.keys(world.bondAnalysis.profiles).filter(inScope);
+  const bonds = Object.entries(world.rels || {}).filter(([, bond]) => !keep || (inScope(bond.from) && inScope(bond.to)));
   return "\n[[FULL_BOND_CONTEXT]]\n" + JSON.stringify({
     rules: "Full profiles/currentBonds are PRIVATE director data and override older brief, identity, bible or keyword-derived relationship hints. For each actor, knowledgeByActor is the only authority on other actors' private bond knowledge. CURRENT directed bonds govern every actor including AI–AI. Profiles are private actor source, never shared knowledge. A character may know another's secret ONLY when their ID occurs in whoKnows. publicFace is the sole default public view. Never mirror hidden feelings, attraction or private source into reverse knowledge. A group tie does not imply friendship. Preserve all current fields; in-game evolution overrides baseline history. For every directed relationship change emit updated description (4–8 sentences), summary, publicFace, hiddenFeelings, history, dynamics, wants, status, levels and whoKnows where the event changes them, alongside existing a/b/delta/mood/why fields. PublicFace excludes private feelings; mood is private emotional state. Newly formed secrets reset witnesses to actual knowing IDs. Baselines never change during gameplay. Never reveal unknown secrets in posts, gossip, popups, chat or scenes.",
-    profiles: Object.fromEntries(Object.entries(world.bondAnalysis.profiles).map(([id, entry]) => [id, entry.profile])),
-    currentBonds: world.rels,
-    knowledgeByActor: Object.fromEntries(Object.keys(world.bondAnalysis.profiles).map(id => [id,
-      Object.fromEntries(Object.entries(world.rels || {}).filter(([, bond]) => bond.from === id || bond.to === id).map(([key, bond]) => [key,
-        bond.from === id || bond.whoKnows?.includes(id) ? bond : { from: bond.from, to: bond.to, publicFace: bond.publicFace }
+    profiles: Object.fromEntries(profileIds.map((id) => [id, compactProfile(world.bondAnalysis.profiles[id].profile)])),
+    currentBonds: Object.fromEntries(bonds.map(([key, bond]) => [key, compactBond(bond)])),
+    knowledgeByActor: Object.fromEntries(profileIds.map((id) => [id,
+      Object.fromEntries(bonds.filter(([, bond]) => bond.from === id || bond.to === id).map(([key, bond]) => [key,
+        bond.from === id || bond.whoKnows?.includes(id) ? compactBond(bond) : { from: bond.from, to: bond.to, publicFace: bond.publicFace }
       ]))
     ])),
   }) + "\n[[/FULL_BOND_CONTEXT]]";
