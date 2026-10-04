@@ -5195,7 +5195,7 @@ function providerModel(provider, body = {}) {
     return GROQ_MODEL_2 || GROQ_MODEL || "";
   }
   if (provider === "openrouter-dm-dolphin") {
-    return "cognitivecomputations/dolphin3.0-mistral-24b";
+    return "cognitivecomputations/dolphin3.0-mistral-24b:free";
   }
   if (provider === "openrouter-dm-venice") {
     return "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
