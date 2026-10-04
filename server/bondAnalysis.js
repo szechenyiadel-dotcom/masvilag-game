@@ -790,6 +790,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         deferring = true;
       }
 
+      if (typeof req.body?.why === "string" && req.body.stage === "profile" && typeof req.body.owner === "string") console.info("[bond-analysis-why]", req.body.owner, req.body.why.slice(0, 300));
       let prepared;
       try {
         prepared = await prepare(session, body);

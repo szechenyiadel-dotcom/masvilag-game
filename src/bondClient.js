@@ -115,6 +115,27 @@ function legacyBondSourceFingerprint(world, subjects) {
   return JSON.stringify(subjects(world).map((character) => ({ id: character.id, fields: sheetFields(character, world) })).sort((a, b) => a.id.localeCompare(b.id)));
 }
 
+// A short fingerprint per character, kept with the analysis so that "the sheets changed" can say WHICH character.
+const shortHash = (text) => { let hash = 5381; for (let i = 0; i < text.length; i += 1) hash = ((hash * 33) ^ text.charCodeAt(i)) >>> 0; return hash.toString(36); };
+export function bondSourceHashes(world, subjects) {
+  return Object.fromEntries(subjects(world).map((character) => [character.id, shortHash(JSON.stringify(relationshipFields(character, world)))]));
+}
+
+/* Why the stored analysis is not current, in a few words (for the server log, so a "not ready" can be explained). */
+export function staleReason(world, subjects) {
+  const analysis = world.bondAnalysis;
+  if (!analysis) return "no analysis yet";
+  if (analysis.version !== BOND_ANALYSIS_VERSION) return "analysis version " + analysis.version;
+  if (analysis.refreshPending) return "placeholder analysis (refresh pending)";
+  if (analysisReady(world, subjects)) return "current (read again on request)";
+  if (!analysis.sources) return "sheets differ (no per-character record in the stored analysis)";
+  const now = bondSourceHashes(world, subjects);
+  const changed = Object.keys(now).filter((id) => analysis.sources[id] !== undefined && analysis.sources[id] !== now[id]);
+  const added = Object.keys(now).filter((id) => analysis.sources[id] === undefined);
+  const removed = Object.keys(analysis.sources).filter((id) => now[id] === undefined);
+  return [changed.length ? "changed: " + changed.join(",") : "", added.length ? "added: " + added.join(",") : "", removed.length ? "removed: " + removed.join(",") : ""].filter(Boolean).join("; ") || "fingerprint differs";
+}
+
 export function analysisReady(world, subjects) {
   // refreshPending marks placeholder baselines written by an earlier "instant
   // restart"; they were never read from the sheets, so they must be read now.
@@ -159,6 +180,9 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
     if (token) generations[person.id] = token;
   }
   const forceOf = (id) => generations[id] || "";
+  // Sent with the first request of this run so the server log can say why a reading was needed.
+  const why = String(staleReason(world, subjects)).slice(0, 300);
+  const sourceHashes = bondSourceHashes(world, subjects);
   const sheets = {};
   const fieldNames = {};
   let failed = false;
@@ -191,7 +215,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       try {
         const response = await api("/ai/bond-analysis", {
           method: "POST",
-          body: JSON.stringify(jobKey ? { poll: jobKey } : { ...body, force: forceOf(body.owner) }),
+          body: JSON.stringify(jobKey ? { poll: jobKey } : { ...body, force: forceOf(body.owner), ...(body.stage === "profile" ? { why } : {}) }),
         });
         transientFailures = 0;
         if (!reported && onFirst) { reported = true; onFirst({ key: response.jobKey || response.cacheKey || null, pending: Boolean(response.pending) }); }
@@ -313,6 +337,7 @@ export async function rebuildBondGraph(world, { subjects, api, language, force =
       recalculated,
       recalculatedBonds,
       generations,
+      sources: sourceHashes,
       completedAt: Date.now(),
     },
   };
