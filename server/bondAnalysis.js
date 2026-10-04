@@ -49,9 +49,8 @@ const openaiFallback = (env) => Boolean(env.OPENAI_API_KEY) && !/^(0|off|false|n
 
 const FREE_GEMINI_SLOTS = ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8"];
 
-/* The free Gemini keys (plus the paid one only on opt-in), the starting key rotated so jobs that run side by side
-   do not all begin on the same one. */
-function geminiKeySlots(env, semanticStartOffset = 0) {
+/* The free Gemini keys that exist, in order, without duplicates. */
+function freeGeminiSlots(env) {
   const slots = [];
   const seen = new Set();
   for (const keySlot of FREE_GEMINI_SLOTS) {
@@ -60,38 +59,73 @@ function geminiKeySlots(env, semanticStartOffset = 0) {
     seen.add(key);
     slots.push(keySlot);
   }
-  const offset = slots.length ? ((Number(semanticStartOffset) || 0) % slots.length + slots.length) % slots.length : 0;
-  const rotated = slots.length ? [...slots.slice(offset), ...slots.slice(0, offset)] : [];
-  return [...rotated, ...(allowPaid(env) && env.GEMINI_API_KEY && !seen.has(env.GEMINI_API_KEY) ? ["GEMINI_API_KEY"] : [])];
+  return slots;
 }
 
-/* Model by model, each on every key: the best model is tried on all keys before the next one is. A model that
-   is overloaded or out of quota is skipped on the other keys by the shared ledger instead of being asked again. */
-function geminiCandidates(env, models, semanticStartOffset = 0) {
-  const keySlots = geminiKeySlots(env, semanticStartOffset);
+const rotated = (list, offset) => {
+  const start = list.length ? ((Number(offset) || 0) % list.length + list.length) % list.length : 0;
+  return [...list.slice(start), ...list.slice(0, start)];
+};
+
+/* The free keys are split in two groups so one model's load (and its daily quota) is not carried by every key: the
+   first BOND_ANALYSIS_FLASH_KEYS keys (3 of the 7) are the home of the plain Flash models, the others (4 of the 7)
+   the home of the light ones. The starting key of each group is rotated so jobs that run side by side do not all
+   begin on the same one. The paid key (only on opt-in) is kept apart: it is asked after every free candidate. */
+function geminiKeyGroups(env, semanticStartOffset = 0) {
+  const free = freeGeminiSlots(env);
+  const given = env.BOND_ANALYSIS_FLASH_KEYS;
+  const flashCount = Math.min(free.length, Math.max(0, Number.isFinite(Number(given)) && given !== undefined && String(given).trim() !== "" ? Math.floor(Number(given)) : 3));
+  return {
+    flash: rotated(free.slice(0, flashCount), semanticStartOffset),
+    lite: rotated(free.slice(flashCount), semanticStartOffset),
+    paid: allowPaid(env) && env.GEMINI_API_KEY && !free.some((slot) => env[slot] === env.GEMINI_API_KEY) ? ["GEMINI_API_KEY"] : [],
+  };
+}
+
+/* Model by model, each on every key of the group: the best model is tried on all of them before the next one is. A
+   model that is overloaded or out of quota is skipped on the other keys by the shared ledger instead of being asked
+   again. A (model, key) pair already listed is not listed twice. */
+function geminiCandidates(env, groups, seen = new Set()) {
   const candidates = [];
-  for (const model of models) {
-    for (const keySlot of keySlots) {
-      candidates.push({
-        name: "gemini",
-        model,
-        key: env[keySlot],
-        keySlot,
-        contextWindow: Number(env.GEMINI_ANALYSIS_CONTEXT_WINDOW),
-        outputLimit: Number(env.GEMINI_ANALYSIS_OUTPUT_LIMIT),
-      });
+  for (const [models, keySlots] of groups) {
+    for (const model of models) {
+      for (const keySlot of keySlots) {
+        const id = model + "|" + keySlot;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        candidates.push({
+          name: "gemini",
+          model,
+          key: env[keySlot],
+          keySlot,
+          contextWindow: Number(env.GEMINI_ANALYSIS_CONTEXT_WINDOW),
+          outputLimit: Number(env.GEMINI_ANALYSIS_OUTPUT_LIMIT),
+        });
+      }
     }
   }
   return candidates;
+}
+
+/* The plain Flash models of a sheet reading: the owner's choice, gemini-3.5-flash, then the other full ones (when
+   GEMINI_EXTRA_MODELS is "off" that is only the owner's choice). */
+const BOND_FLASH_EXTRA = "gemini-3.5-flash";
+function bondFlashModels(env, config) {
+  const chosen = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
+  if (!chosen.length) return [];
+  return uniqueValues([...chosen, ...(config.extra.length ? [BOND_FLASH_EXTRA] : []), ...config.extra]);
 }
 
 export function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
   const candidates = [];
 
   if (mode === "schema") {
-    /* Normalising an answer is light work: the light Gemini models on the free keys first, OpenAI last. */
+    /* Normalising an answer is light work: the light models first (on their own keys, then on the others), then the
+       plain Flash ones, OpenAI last. */
     const config = geminiModelConfig(env);
-    candidates.push(...geminiCandidates(env, uniqueValues([...config.lite, ...config.extra]), semanticStartOffset));
+    const groups = geminiKeyGroups(env, semanticStartOffset);
+    const flash = uniqueValues([...(config.extra.length ? [BOND_FLASH_EXTRA] : []), ...config.extra]);
+    candidates.push(...geminiCandidates(env, [[config.lite, groups.lite], [config.lite, groups.flash], [flash, groups.flash], [flash, groups.lite]]));
 
     if (openaiFallback(env)) {
       candidates.push({
@@ -107,10 +141,13 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
   /* The models the owner chose, then the other full models (one of them is almost always up when another is
      overloaded: a 503 "high demand" is about a model, not a key), then the light ones. The validators check every
      answer, so a weaker model can only help, never slip a bad reading through. OpenAI comes only after all of them. */
-  const chosen = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
   const config = geminiModelConfig(env);
-  const models = chosen.length ? uniqueValues([...chosen, ...config.extra, ...config.lite]) : [];
-  candidates.push(...geminiCandidates(env, models, semanticStartOffset));
+  const flash = bondFlashModels(env, config);
+  const lite = flash.length ? config.lite : [];
+  const groups = geminiKeyGroups(env, semanticStartOffset);
+  /* The split first (plain Flash on its 3 keys, the light models on their 4), then each group helps the other's
+     models, and only then the paid Gemini key (opt-in) and OpenAI. */
+  candidates.push(...geminiCandidates(env, [[flash, groups.flash], [lite, groups.lite], [flash, groups.lite], [lite, groups.flash], [flash, groups.paid]]));
 
   if (openaiFallback(env)) {
     candidates.push({
