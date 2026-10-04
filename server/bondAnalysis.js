@@ -138,16 +138,17 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
     return candidates;
   }
 
-  /* The models the owner chose, then the other full models (one of them is almost always up when another is
-     overloaded: a 503 "high demand" is about a model, not a key), then the light ones. The validators check every
-     answer, so a weaker model can only help, never slip a bad reading through. OpenAI comes only after all of them. */
+  /* Profile extraction is mechanical and already validated against verbatim evidence. Start it on the light models
+     and their own keys so a Connections refresh does not walk through every exhausted full-Flash quota first.
+     Baseline relationship inference keeps the existing full-model-first semantic order. */
   const config = geminiModelConfig(env);
   const flash = bondFlashModels(env, config);
   const lite = flash.length ? config.lite : [];
   const groups = geminiKeyGroups(env, semanticStartOffset);
-  /* The split first (plain Flash on its 3 keys, the light models on their 4), then each group helps the other's
-     models, and only then the paid Gemini key (opt-in) and OpenAI. */
-  candidates.push(...geminiCandidates(env, [[flash, groups.flash], [lite, groups.lite], [flash, groups.lite], [lite, groups.flash], [flash, groups.paid]]));
+  const modelGroups = mode === "profile"
+    ? [[lite, groups.lite], [lite, groups.flash], [flash, groups.flash], [flash, groups.lite], [flash, groups.paid]]
+    : [[flash, groups.flash], [lite, groups.lite], [flash, groups.lite], [lite, groups.flash], [flash, groups.paid]];
+  candidates.push(...geminiCandidates(env, modelGroups));
 
   if (openaiFallback(env)) {
     candidates.push({
@@ -389,7 +390,8 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const transport = options.transport || request;
   const env = options.env || process.env;
   const mode = options.mode === "schema" ? "schema" : "semantic";
-  const candidates = options.candidates || providerCandidates(env, mode, options.semanticStartOffset || 0);
+  const candidateMode = options.candidateMode === "profile" ? "profile" : mode;
+  const candidates = options.candidates || providerCandidates(env, candidateMode, options.semanticStartOffset || 0);
   const failures = [];
   const clock = options.clock || Date.now;
   if (!candidates.length) {
@@ -716,6 +718,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
         const analyzed = await analyze(prompt, schema, validate, {
           outputTokens,
           fastCapacityCheck: true,
+          candidateMode: stage === "profile" ? "profile" : "semantic",
           semanticStartOffset: rotation++,
           deadline: clock() + deadlineMs,
           clock,
