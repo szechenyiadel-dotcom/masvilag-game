@@ -22,6 +22,7 @@ const pick = (names) => ast.program.body
 
 const NAMES = [
   "MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_MODEL", "GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2",
+  "GLHF_API_KEY", "GLHF_BASE_URL", "GLHF_MODEL",
   "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_MODEL_ENV", "GEMINI_PAID_KEY", "GEMINI_FREE_KEYS", "GEMINI_KEYS", "AI_ALLOW_PAID_BACKGROUND",
   "AI_GROQ_MAX_INPUT_CHARS", "AI_PROMPT_DEBUG", "AI_GATE", "AI_REFUSALS", "GEMINI_LEDGER", "GEMINI_MODELS", "groqRequestSize",
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
@@ -49,6 +50,7 @@ const quota = (provider) => ({ ok: false, status: 429, payload: { error: { messa
 const ENV = {
   MISTRAL_API_KEY: "m1", MISTRAL_API_KEY_2: "m2", MISTRAL_MODEL: "mistral-small",
   GROQ_API_KEY: "g1", GROQ_API_KEY_2: "g2", GROQ_MODEL: "groq-model",
+  GLHF_API_KEY: "glhf-key", GLHF_BASE_URL: "https://glhf.chat/api/openai/v1", GLHF_MODEL: "hf:test/model",
   GEMINI_API_KEY: "paid", GEMINI_API_KEY_2: "free2", GEMINI_MODEL: "gemini-x",
   OPENAI_API_KEY: "oa",
 };
@@ -58,7 +60,7 @@ test("DM and scene use the DeepSeek and Mistral chain whoever started them; comm
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
   for (const extra of [{}, { foreground: true }]) {
-    assert.deepEqual(order("dm", extra), ["openrouter3", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
+    assert.deepEqual(order("dm", extra), ["glhf", "openrouter3", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
     assert.deepEqual(order("scene", extra), ["mistral", "mistral2"], "scene " + JSON.stringify(extra));
   }
   /* comments: free chain in the background, billed chain only when the player is waiting */
@@ -105,16 +107,16 @@ test("A free provider that answers is used normally for background work, and Mis
   assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
 });
 
-test("A background DM is written by DeepSeek, then Mistral; when every one of them is down it waits, and never buys OpenAI", async () => {
+test("A background DM is written by GLHF first, then DeepSeek/Mistral fallbacks; when all are down it waits, and never buys OpenAI", async () => {
   const first = gate(ENV, (provider) => ok(provider));
   const written = await first.context.executeAITask(task(first.context, "dm"));
   assert.equal(written.ok, true);
-  assert.deepEqual(Array.from(first.calls), ["openrouter3"], "the first of the chain answered; no free model was asked");
+  assert.deepEqual(Array.from(first.calls), ["glhf"], "GLHF is the first DM provider");
   const down = gate(ENV, (provider) => quota(provider));
   const result = await down.context.executeAITask(task(down.context, "dm"));
   assert.equal(result.waiting, true);
   assert.equal(result.status, 503);
-  assert.deepEqual(Array.from(down.calls), ["openrouter3", "mistral", "mistral2"]);
+  assert.deepEqual(Array.from(down.calls), ["glhf", "openrouter3", "mistral", "mistral2"]);
   assert.ok(!down.calls.some((provider) => ["openai", "gemini", "groq", "groq2"].includes(provider)), "no other provider wrote the voice: " + down.calls);
 });
 
@@ -129,10 +131,10 @@ test("The emergency OpenAI fallback is closed to background work and still open 
 });
 
 test("A player waiting on a scene may still use the paid DeepSeek route when the free ones fail", async () => {
-  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter3" ? ok(provider) : quota(provider)));
+  const { context, calls } = gate(ENV, (provider) => (provider === "glhf" ? ok(provider) : quota(provider)));
   const result = await context.executeAITask(task(context, "dm", { foreground: true }));
   assert.equal(result.ok, true);
-  assert.equal(calls[0], "openrouter3");
+  assert.equal(calls[0], "glhf");
 });
 
 test("AI_ALLOW_PAID_BACKGROUND=1 is the only way background work reaches paid providers", () => {
@@ -237,7 +239,7 @@ test("Utility tasks (meaning, translation, music note, relationship impact) go t
 test("Everything that gives a character a voice keeps its own chain, Groq only as a free fallback after Gemini", () => {
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", { ...task(context, source, extra).body, max_tokens: 600 }));
-  assert.equal(order("dm")[0], "openrouter3");
+  assert.equal(order("dm")[0], "glhf");
   assert.equal(order("scene")[0], "mistral");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "gemini", source);
   assert.deepEqual(order("feed-post"), ["gemini"]);
@@ -784,4 +786,13 @@ test("A reply the player reads gets half again as much room under the paid ceili
   const other = groqPath();
   await other.context.proxyCompatibleMessage("mistral2", "key", "m", "https://api.mistral.ai/x", { ...dmBody(), source: "comments" });
   assert.ok(textLength(other.sent[0]) <= 61000, "another source stays at the base ceiling");
+});
+
+
+test("GLHF is wired as the first DM provider through the configured OpenAI-compatible endpoint", () => {
+  assert.match(source, /const GLHF_API_KEY = String\(process\.env\.GLHF_API_KEY/);
+  assert.match(source, /const GLHF_BASE_URL = String\(process\.env\.GLHF_BASE_URL/);
+  assert.match(source, /const GLHF_MODEL = String\(process\.env\.GLHF_MODEL/);
+  assert.match(source, /provider === "glhf"\) return proxyCompatibleMessage\("glhf", GLHF_API_KEY, providerModel\("glhf", body\), `\$\{GLHF_BASE_URL\}\/chat\/completions`/);
+  assert.match(source, /raw = \["glhf", "openrouter3", "mistral", "mistral2"\]/);
 });
