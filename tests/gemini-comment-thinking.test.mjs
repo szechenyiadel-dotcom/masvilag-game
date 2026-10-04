@@ -13,7 +13,7 @@ const pick = (names) => ast.program.body
   .map((node) => source.substring(node.start, node.end)).join("\n");
 
 const context = vm.createContext({ String, Number, Array, JSON, RegExp });
-vm.runInContext(pick(["GEMINI_COMMENT_THINKING_ROOM", "extractText", "buildGeminiPayload"]) + "\nthis.build = buildGeminiPayload;", context);
+vm.runInContext(pick(["extractText", "buildGeminiPayload"]) + "\nthis.build = buildGeminiPayload;", context);
 const body = (source, model, max_tokens) => ({ source, model, max_tokens, system: "s", messages: [{ role: "user", content: "hi" }] });
 
 test("Gemini 3 comment requests think little and get room for the answer", () => {
