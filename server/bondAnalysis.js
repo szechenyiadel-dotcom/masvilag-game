@@ -399,7 +399,13 @@ function cleanIdentities(raw, castIds) {
 }
 const cacheKeyFor = (parts) => "bond-v" + BOND_ANALYSIS_VERSION + ":" + sheetHash(parts.join("\n"));
 
-export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now, ledger = null }) {
+/* A reading is carried by the server, not by the open app: the browser only starts it and asks how it is going.
+   A phone that went to sleep, or a restart of the server, must not leave a half-done reading waiting for the next poll.
+   Every `resumeEveryMs` the server picks up the readings that are still pending (and were touched recently), whose
+   retry time has come and that nobody is running, and runs them again. `resumeEveryMs: 0` switches that off. */
+const RESUME_WINDOW_SECONDS = 30 * 60;
+
+export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now, ledger = null, resumeEveryMs = 0 }) {
   // One scheduler for every job. The browser may submit all sheets at once; the
   // server decides how many heavy model calls really run together.
   const concurrency = Math.max(1, Number(env.BOND_ANALYSIS_CONCURRENCY) || 8);
@@ -550,6 +556,40 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     );
   }
 
+  let resuming = false;
+  async function resumePending() {
+    if (resuming) return 0;
+    resuming = true;
+    let started = 0;
+    try {
+      const rows = await pool.query(
+        "SELECT cache_key, data FROM relationship_reading_cache WHERE data->>'pending' = 'true' AND updated_at > NOW() - make_interval(secs => $1)",
+        [RESUME_WINDOW_SECONDS],
+      );
+      for (const row of rows.rows) {
+        const job = row.data;
+        if (!job?.request || active.has(row.cache_key) || clock() < Number(job.retryAt || 0)) continue;
+        try {
+          const prepared = await prepare({ worldCode: job.world }, job.request);
+          if (prepared.jobKey !== row.cache_key || (prepared.stage === "baseline" && !prepared.missing.length)) continue;
+          await launch(prepared, job);
+          started += 1;
+        } catch (error) {
+          console.warn("[bond-analysis-resume]", error.message);
+        }
+      }
+    } catch (error) {
+      console.warn("[bond-analysis-resume]", error.message);
+    } finally { resuming = false; }
+    if (started) console.info("[bond-analysis-resume] picked up", started, "pending reading(s) without the app");
+    return started;
+  }
+  if (resumeEveryMs > 0) {
+    const first = setTimeout(resumePending, 5000);
+    const timer = setInterval(resumePending, resumeEveryMs);
+    first.unref?.(); timer.unref?.();
+  }
+
   app.post("/ai/bond-analysis", async (req, res) => {
     try {
       if (!(await requireDb(res))) return;
@@ -595,4 +635,5 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
       res.status(error.status || 503).json({ error: error.message });
     }
   });
+  return { resumePending };
 }

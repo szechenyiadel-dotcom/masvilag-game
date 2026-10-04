@@ -249,7 +249,9 @@ async function requireDb(res) {
   await dbReady;
   return true;
 }
-registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, ledger: GEMINI_LEDGER });
+/* The server carries a sheet reading on by itself (see registerBondAnalysis): a sleeping phone or a restart does not
+   stop it. BOND_ANALYSIS_RESUME_MS=0 switches this off. */
+registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, ledger: GEMINI_LEDGER, resumeEveryMs: process.env.BOND_ANALYSIS_RESUME_MS === undefined ? 30000 : Math.max(0, Number(process.env.BOND_ANALYSIS_RESUME_MS) || 0) });
 
 /* ---------- biztonságos account + session segédek ---------- */
 
