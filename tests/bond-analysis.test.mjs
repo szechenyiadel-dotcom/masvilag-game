@@ -996,3 +996,52 @@ test("A repair model that Google no longer offers (404) is asked once, not on ev
   assert.deepEqual(asked, ["full@s", "gone-model@k1", "good-model@k1"], "the gone model was asked on one key only");
   assert.ok(ledger.restMs("k2", "gone-model") > 0, "and every other key now knows it is gone");
 });
+
+/* ---------- what the rules already decide is applied, so one detail no longer sinks a reading ---------- */
+
+const rivalFact = { type: "rivális", group: "Cobra Kai", source: "logikai következtetés", evidence: [{ sheetOf: "a", quote: "Anna a Cobra Kai tagja." }, { sheetOf: "b", quote: "Béla a Miyagi-dojo tanítványa." }] };
+const sheetText = "Anna Bélával jár edzeni. Anna a Cobra Kai tagja.";
+const sanitizeContext = (extra = {}) => ({ ownSheet: sheetText, factsByTarget: { b: [rivalFact] }, cast: new Set(["a", "b", "c"]), ...extra });
+
+test("The group layer and the quotes of the objective facts the server supplied are completed when the model left them out", () => {
+  const answer = () => ({ bonds: [supportedBond({ layers: [], factEvidence: [] })] });
+  assert.throws(() => validateBonds(answer(), "a", [{ id: "b" }], sheetText, { b: [rivalFact] }), /Missing deterministic group layer: rivális/, "the old behaviour: the whole reading is rejected");
+  const fixed = sanitizeBonds(answer(), sanitizeContext());
+  assert.deepEqual(fixed.bonds[0].layers, ["rivális"]);
+  assert.deepEqual(fixed.bonds[0].factEvidence, rivalFact.evidence);
+  validateBonds(fixed, "a", [{ id: "b" }], sheetText, { b: [rivalFact] });
+  const again = sanitizeBonds(structuredClone(fixed), sanitizeContext());
+  assert.deepEqual(again, fixed, "applying it twice changes nothing");
+});
+
+test("A cross-sheet quote that is not among the supplied facts is removed, never kept", () => {
+  const fake = { sheetOf: "b", quote: "Béla titokban Anna ellensége." };
+  const fixed = sanitizeBonds({ bonds: [supportedBond({ layers: ["rivális"], factEvidence: [...rivalFact.evidence, fake] })] }, sanitizeContext());
+  assert.deepEqual(fixed.bonds[0].factEvidence, rivalFact.evidence);
+  validateBonds(fixed, "a", [{ id: "b" }], sheetText, { b: [rivalFact] });
+});
+
+test("A quote that is not verbatim in the owner's sheet is dropped; a field it alone backed becomes null", () => {
+  const good = "Anna Bélával jár edzeni.";
+  const answer = supportedBond({ evidence: [good, "Béla a Miyagi-dojo tanítványa."], hiddenFeelings: "Anna tart Bélától.", wants: "Győzni.", fieldEvidence: [{ field: "hiddenFeelings", quotes: ["kitalált idézet"] }, { field: "wants", quotes: [good, "ez sincs a lapon"] }], layers: ["rivális"], factEvidence: rivalFact.evidence });
+  const fixed = sanitizeBonds({ bonds: [answer] }, sanitizeContext()).bonds[0];
+  assert.deepEqual(fixed.evidence, [good]);
+  assert.equal(fixed.hiddenFeelings, null, "its only quote was fake");
+  assert.equal(fixed.wants, "Győzni.", "one verbatim quote is enough");
+  assert.deepEqual(fixed.fieldEvidence, [{ field: "wants", quotes: [good] }]);
+  validateBonds({ bonds: [fixed] }, "a", [{ id: "b" }], sheetText, { b: [rivalFact] });
+});
+
+test("Witnesses outside the cast go, and an 'explicit' bond with no evidence at all becomes an inference", () => {
+  const fixed = sanitizeBonds({ bonds: [bond("a", "b", { source: "explicit", whoKnows: ["a", "ghost", "c"] })] }, { ownSheet: "Sima diák.", factsByTarget: { b: [] }, cast: new Set(["a", "b", "c"]) }).bonds[0];
+  assert.deepEqual(fixed.whoKnows, ["a", "c"]);
+  assert.equal(fixed.source, "logikai következtetés");
+  validateBonds({ bonds: [fixed] }, "a", [{ id: "b" }], "Sima diák.", { b: [] }, ["a", "b", "c"]);
+});
+
+test("Without an outside context the sanitiser touches no evidence or layer", () => {
+  const answer = supportedBond({ evidence: ["valami"], layers: [], factEvidence: [{ sheetOf: "b", quote: "x" }] });
+  const before = structuredClone(answer);
+  sanitizeBonds({ bonds: [answer] });
+  assert.deepEqual(answer.evidence, before.evidence); assert.deepEqual(answer.layers, before.layers); assert.deepEqual(answer.factEvidence, before.factEvidence);
+});

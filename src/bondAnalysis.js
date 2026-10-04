@@ -231,21 +231,55 @@ export function reconcileFacts(from, to, profiles, groupIndex) {
   return output;
 }
 
-/* The subjective fields (hidden feelings, dynamics, wants, shared history) may only stay filled when the answer backs
-   them with an own-sheet quote; otherwise the rule is "null". A model that fills one without a quote used to make the
-   whole reading fail and start over (minutes per round, a paid repair call each time). The rule is now applied as
-   it is written: the unbacked field becomes null, everything else is checked as strictly as before (quotes must
-   still be verbatim). Works in place; leaves anything that is not shaped like a bond to the schema check. */
-export function sanitizeBonds(result) {
+const isVerbatim = (sheet, quote) => typeof quote === "string" && quote.trim() !== "" && quoteForm(quote) !== "" && (sheet.includes(quote) || sheetForm(sheet).includes(quoteForm(quote)));
+const evidencePairs = (fact) => (Array.isArray(fact?.evidence) ? fact.evidence : []).filter((row) => row && typeof row.sheetOf === "string" && typeof row.quote === "string");
+
+/* What the validator would reject over a detail the rules already decide is applied as the rules are written, so one
+   detail no longer sinks a whole reading (minutes per round, a paid repair call each time). Nothing is invented and
+   nothing unproven survives:
+   - a quote that is not verbatim in the owner's sheet is dropped (a fake quote never stays),
+   - a subjective field (hidden feelings, dynamics, wants, shared history) without a backing quote becomes null,
+   - the objective facts the server itself supplied (their quotes and group layers) are completed when the model
+     left them out, and quotes that are not among them are removed,
+   - witnesses outside the cast are removed, and an "explicit" source without any evidence becomes an inference.
+   Works in place. Without `context` only the checks that need no outside data run. Anything that is not shaped like a
+   bond is left to the schema check. */
+export function sanitizeBonds(result, context = null) {
   if (!result || !Array.isArray(result.bonds)) return result;
+  const { ownSheet = null, factsByTarget = null, cast = null } = context || {};
   for (const bond of result.bonds) {
     if (!bond || typeof bond !== "object") continue;
+    if (typeof ownSheet === "string") {
+      if (Array.isArray(bond.evidence)) bond.evidence = bond.evidence.filter((quote) => isVerbatim(ownSheet, quote));
+      if (Array.isArray(bond.fieldEvidence)) {
+        bond.fieldEvidence = bond.fieldEvidence
+          .filter((row) => row && typeof row.field === "string" && Object.prototype.hasOwnProperty.call(bond, row.field) && Array.isArray(row.quotes))
+          .map((row) => ({ ...row, quotes: row.quotes.filter((quote) => isVerbatim(ownSheet, quote)) }))
+          .filter((row) => row.quotes.length > 0);
+      }
+    }
     const backed = (field) => Array.isArray(bond.fieldEvidence) && bond.fieldEvidence.some((row) => row && row.field === field && Array.isArray(row.quotes) && row.quotes.length > 0);
     for (const field of ["hiddenFeelings", "dynamics", "wants"]) {
       if (typeof bond[field] === "string" && !backed(field)) bond[field] = null;
     }
+    const objective = factsByTarget && Array.isArray(factsByTarget[bond.to]) ? factsByTarget[bond.to] : null;
+    if (objective) {
+      const known = new Set(objective.flatMap(evidencePairs).map((row) => row.sheetOf + "\u0000" + row.quote));
+      const kept = (Array.isArray(bond.factEvidence) ? bond.factEvidence : []).filter((row) => row && known.has(row.sheetOf + "\u0000" + row.quote));
+      const have = new Set(kept.map((row) => row.sheetOf + "\u0000" + row.quote));
+      for (const row of objective.flatMap(evidencePairs)) {
+        const key = row.sheetOf + "\u0000" + row.quote;
+        if (!have.has(key)) { have.add(key); kept.push({ sheetOf: row.sheetOf, quote: row.quote }); }
+      }
+      bond.factEvidence = kept;
+      const layers = Array.isArray(bond.layers) ? bond.layers : [];
+      for (const fact of objective) if (fact.source === "logikai következtetés" && typeof fact.type === "string" && !layers.includes(fact.type)) layers.push(fact.type);
+      bond.layers = layers;
+    }
+    if (cast && Array.isArray(bond.whoKnows)) bond.whoKnows = bond.whoKnows.filter((id) => cast.has(id));
     const proven = (Array.isArray(bond.evidence) && bond.evidence.length > 0) || (Array.isArray(bond.factEvidence) && bond.factEvidence.length > 0);
     if (typeof bond.history === "string" && !proven) bond.history = null;
+    if (bond.source === "explicit" && !proven) bond.source = "logikai következtetés";
   }
   return result;
 }
