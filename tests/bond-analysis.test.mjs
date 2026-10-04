@@ -933,3 +933,66 @@ test("Sanitising leaves anything that is not shaped like a bond to the schema ch
   assert.deepEqual(sanitizeBonds({ bonds: [null, 5, {}] }), { bonds: [null, 5, {}] });
   assert.deepEqual(sanitizeBonds({ other: 1 }), { other: 1 });
 });
+
+/* ---------- a repair that cannot work stops early and respects the shared ledger ---------- */
+
+test("A repair stops after two answers that still do not validate, instead of walking every model and key", async () => {
+  const semantic = gem("s", "full");
+  const repairs = ["lite-a", "lite-b", "lite-c"].flatMap((model) => ["k1", "k2", "k3", "k4"].map((key) => gem(key, model)));
+  const asked = [];
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) { asked.push(modelOfUrl(url) + "@" + opts.headers["x-goog-api-key"]); return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] }; }
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const warn = console.warn; console.warn = () => {};
+  try {
+    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000 }), /No analysis provider completed/);
+  } finally { console.warn = warn; }
+  assert.deepEqual(asked, ["full@s", "lite-a@k1", "lite-a@k2"], "one reading, two repairs, then it gives up");
+});
+
+test("A repair never asks more than eight times, even when the providers keep failing", async () => {
+  const semantic = gem("s", "full");
+  const repairs = ["lite-a", "lite-b", "lite-c"].flatMap((model) => ["k1", "k2", "k3", "k4", "k5"].map((key) => gem(key, model)));
+  const asked = [];
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) {
+      const model = modelOfUrl(url); asked.push(model);
+      if (model === "full") return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] };
+      throw Object.assign(new Error("Analysis provider HTTP 500: boom"), { status: 500 });
+    }
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const warn = console.warn; console.warn = () => {};
+  try {
+    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000 }), /No analysis provider completed/);
+  } finally { console.warn = warn; }
+  assert.equal(asked.length, 1 + 8, "the reading plus at most eight repair attempts");
+});
+
+test("A repair model that Google no longer offers (404) is asked once, not on every key, and the ledger learns it", async () => {
+  const semantic = gem("s", "full");
+  const repairs = ["gone-model", "good-model"].flatMap((model) => ["k1", "k2", "k3"].map((key) => gem(key, model)));
+  const asked = [];
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) {
+      const model = modelOfUrl(url); asked.push(model + "@" + opts.headers["x-goog-api-key"]);
+      if (model === "full") return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] };
+      if (model === "gone-model") throw Object.assign(new Error("Analysis provider HTTP 404: This model models/gone-model is no longer available to new users."), { status: 404, payload: { error: { message: "This model models/gone-model is no longer available to new users." } } });
+      return okReply;
+    }
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  const ledger = createGeminiLedger();
+  const warn = console.warn; console.warn = () => {};
+  let result;
+  try {
+    result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000, ledger });
+  } finally { console.warn = warn; }
+  assert.equal(result.formatterModel, "good-model");
+  assert.deepEqual(asked, ["full@s", "gone-model@k1", "good-model@k1"], "the gone model was asked on one key only");
+  assert.ok(ledger.restMs("k2", "gone-model") > 0, "and every other key now knows it is gone");
+});

@@ -257,6 +257,22 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
   return data.choices[0].message?.content;
 }
 
+/* What a Gemini failure says about the (key, model) pair goes to the shared ledger, and what Google actually said to
+   the log, so "ran out", "has no free quota", "overloaded" and "gone" can be told apart. */
+function reportGeminiFailure(ledger, candidate, error) {
+  if (!ledger || candidate.name !== "gemini" || !(error.status || error.transient === true)) return;
+  const outcome = ledger.fail(candidate.key, candidate.model, { status: error.status || 0, message: error.message, payload: error.payload });
+  if (outcome && outcome.restMs > 0) {
+    console.warn("[bond-analysis-gemini]", candidate.model, candidate.keySlot, "HTTP " + error.status, outcome.level + (outcome.metric ? "/" + outcome.metric : ""),
+      outcome.limit !== undefined ? "limit=" + (outcome.level === "model-no-free-quota" || outcome.limit > 0 ? outcome.limit : "?") : "", outcome.quotaId || "", "rest=" + Math.round(outcome.restMs / 60000) + "min");
+  }
+}
+
+/* A normalising pass that still fails with the same kind of answer on two different models will not be fixed by a
+   third: it stops after two answers that did not validate, and after eight attempts at most. */
+const REPAIR_MAX_ATTEMPTS = 8;
+const REPAIR_MAX_UNFIXED = 2;
+
 async function repairStructuredOutput(raw, originalPrompt, schema, validate, options, transport, validationError, failures, paidRepairs = { left: 1 }) {
   const env = options.env || process.env;
   const candidates = options.schemaCandidates || (options.candidates ? [] : providerCandidates(env, "schema"));
@@ -275,7 +291,11 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
     "Return ONLY the complete corrected schema JSON.",
   ].join("\n\n");
 
+  const ledger = options.ledger || null;
+  let attempts = 0, unfixed = 0;
   for (const candidate of candidates) {
+    if (attempts >= REPAIR_MAX_ATTEMPTS || unfixed >= REPAIR_MAX_UNFIXED) break;
+    if (ledger && candidate.name === "gemini" && ledger.restMs(candidate.key, candidate.model) > 0) continue;
     /* The paid repair is asked once per analysis, not once per semantic candidate: a reading that no repair can fix
        must not run up a paid call for every model and key it passes through. */
     if (candidate.name === "openai") {
@@ -285,13 +305,15 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
       }
       paidRepairs.left -= 1;
     }
+    attempts += 1;
     try {
       const capability = await modelCapabilities(candidate, repairPrompt, schema, transport);
       const outputTokens = options.outputTokens || 64000;
       assertCapacity(capability, outputTokens);
       const repairedRaw = await callStructuredCandidate(candidate, repairPrompt, schema, outputTokens, transport, "schema");
+      if (ledger && candidate.name === "gemini") ledger.succeed(candidate.key, candidate.model);
       const result = JSON.parse(repairedRaw);
-      validate(result);
+      try { validate(result); } catch (invalid) { unfixed += 1; throw invalid; }
       return {
         result,
         provider: candidate.name,
@@ -300,6 +322,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
         inputTokens: capability.inputTokens,
       };
     } catch (error) {
+      reportGeminiFailure(ledger, candidate, error);
       console.warn("[bond-analysis-repair-failed]", candidate.name + "/" + candidate.model, "[" + candidate.keySlot + "]", String(error.message).slice(0, 300));
       failures.push({
         phase: "schema-repair",
@@ -396,14 +419,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     } catch (error) {
       /* Only what says something about the provider (an HTTP error, a dropped connection) is reported; an
          answer that arrived but did not validate says nothing about the key or the model. */
-      if (error.status || error.transient === true) {
-        const outcome = geminiLedgerOf(candidate)?.fail(candidate.key, candidate.model, { status: error.status || 0, message: error.message, payload: error.payload });
-        /* What Google actually said, so "ran out" can be told apart from "has no free quota" and "overloaded". */
-        if (outcome && outcome.restMs > 0) {
-          console.warn("[bond-analysis-gemini]", candidate.model, candidate.keySlot, "HTTP " + error.status, outcome.level + (outcome.metric ? "/" + outcome.metric : ""),
-            outcome.limit !== undefined ? "limit=" + (outcome.level === "model-no-free-quota" || outcome.limit > 0 ? outcome.limit : "?") : "", outcome.quotaId || "", "rest=" + Math.round(outcome.restMs / 60000) + "min");
-        }
-      }
+      reportGeminiFailure(ledger, candidate, error);
       failures.push({
         phase: mode,
         provider: candidate.name,
