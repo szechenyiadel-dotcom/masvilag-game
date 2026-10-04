@@ -466,9 +466,9 @@ export function looksLikeRefusal(text) {
 
 /* ---------- what the paid providers are sent, and what they cost ---------- */
 
-/* These routes keep the same prompt ceiling. For Nemotron/Venice the cap is also a context-safety guard,
-   even when the selected OpenRouter model itself is free. */
-export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]));
+/* The two 33K-context DM OpenRouter routes keep the same prompt ceiling as Mistral so a huge DM cannot
+   overflow them. Nemotron is deliberately absent: its free route has a 1M context and is used as Gemini fallback. */
+export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]));
 export const DEFAULT_PAID_MAX_INPUT_CHARS = 60000;   /* roughly 15-20k tokens */
 
 /* PAID_MAX_INPUT_CHARS in the environment; 0 switches the ceiling off. */
