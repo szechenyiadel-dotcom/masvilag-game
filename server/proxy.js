@@ -5866,6 +5866,7 @@ async function executeAITask(task) {
   const attempts = [];
   const waitHintsMs = [];   /* when a busy or spent provider says it will be ready again */
   let last = null;
+  let unusableAnswer = null;   /* a 200 that holds no JSON at all, kept only as the last resort */
 
   while (true) {
     const provider = healthyProvider(task.requestedProvider, task.body, attempted);
@@ -5900,6 +5901,20 @@ async function executeAITask(task) {
       console.warn("[ai-gate] refused", `source=${task.source}`, `provider=${provider}/${model}`, "— handing the request to the next provider");
       markProviderSuccess(provider);
       continue;
+    }
+    /* A request for JSON answered with no JSON object at all (prose, an empty reasoning answer, a stray
+       sentence) is no answer either: the next provider tries. A cut-off or slightly broken object still
+       counts as an answer, the app repairs those. */
+    if (askedForJson && !refusedByText) {
+      const answered = String(answerText(result) || "");
+      const brace = answered.indexOf("{");
+      if (brace === -1 || !/"[^"\n]{1,60}"\s*:/.test(answered.slice(brace))) {
+        console.warn("[ai-gate] no-json-answer", `source=${task.source}`, `provider=${provider}/${model}`, `chars=${answered.length}`, "start=" + JSON.stringify(answered.slice(0, 160)), "— handing the request to the next provider");
+        attempts.push({ provider, model, status: 422, message: "answer held no JSON" });
+        if (!unusableAnswer) unusableAnswer = result;
+        markProviderSuccess(provider);
+        continue;
+      }
     }
     if (result?.ok) {
       markProviderSuccess(provider);
@@ -5978,6 +5993,9 @@ async function executeAITask(task) {
       console.warn("[ai-gate] emergency-openai-fallback-failed", message.slice(0, 220));
     }
   }
+
+  /* A player waiting gets the JSON-less answer rather than nothing, exactly as before; background work waits. */
+  if (unusableAnswer && isForegroundRequest(task.body)) return unusableAnswer;
 
   const details = summarizeProviderFailures(attempts, task.requestedProvider, task.body);
 
