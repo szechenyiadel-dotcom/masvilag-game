@@ -61,8 +61,10 @@ test("DM uses Dolphin key 1, Venice key 2, then Mistral; Nemotron is reserved fo
     assert.deepEqual(order("dm", extra), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "dm " + JSON.stringify(extra));
     assert.deepEqual(order("scene", extra), ["mistral", "mistral2"], "scene " + JSON.stringify(extra));
   }
-  assert.deepEqual(order("comments"), ["gemini", "groq", "groq2", "openrouter"]);
-  assert.deepEqual(order("comments", { foreground: true }), ["mistral", "mistral2"]);
+  /* Comments: the player-waiting ones and the background ones use the same free chain. */
+  assert.deepEqual(order("comments"), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
+  assert.deepEqual(order("comments", { foreground: true }), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
+  assert.deepEqual(order("player-post-comments", { foreground: true }), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
   for (const source of ["comments", "notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup"]) {
     const background = order(source);
     for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
