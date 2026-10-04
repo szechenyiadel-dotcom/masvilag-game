@@ -700,3 +700,12 @@ test("A Gemini safety block counts against Gemini for that kind of request, a pr
   for (let i = 0; i < 6; i += 1) await prose.context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", system: "narrator", messages: [{ role: "user", content: "p" + i }] } });
   assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm"))[0], "openrouter3", "nothing was recorded for requests that did not ask for JSON");
 });
+
+test("Gemini: an overloaded model is skipped on the other keys at once and the next model answers", async () => {
+  const busy = { status: 503, payload: { error: { message: "This model is currently experiencing high demand. Spikes in demand are usually temporary." } } };
+  const { context, requests } = geminiPath({ respond: ({ model }) => (model === "gemini-3.8-flash" ? busy : geminiOk("fine")) });
+  const result = await context.proxyGeminiMessage(geminiBody());
+  assert.equal(result.ok, true);
+  assert.equal(result.model, "gemini-3.7-flash");
+  assert.deepEqual(requests.map((r) => r.model), ["gemini-3.8-flash", "gemini-3.7-flash"], "the second key was not asked about the busy model");
+});

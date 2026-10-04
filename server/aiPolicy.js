@@ -365,6 +365,12 @@ export function createGeminiLedger({ now = Date.now } = {}) {
       extend(modelRest, model, at + 6 * 3600 * 1000);
       return { level: "model-gone", restMs: 6 * 3600 * 1000, metric: "model-not-available" };
     }
+    /* "This model is currently experiencing high demand": the model is overloaded for everyone, whatever the key.
+       It rests a minute on every key, so the next model is tried instead of this one on each key in turn. */
+    if (code === 503 && /high demand|overloaded|experiencing high/i.test(text)) {
+      extend(modelRest, model, at + 60000);
+      return { level: "model-busy", restMs: 60000, metric: "busy", retryable: true };
+    }
     if (GEMINI_RETRYABLE.includes(code)) {
       const streak = (streaks.get(pairId(key, model)) || 0) + 1;
       streaks.set(pairId(key, model), streak);

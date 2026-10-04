@@ -273,7 +273,7 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
 test("Restart profile rotation keeps every free Gemini fallback and never reaches paid Gemini or OpenAI", async () => {
- const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
+ const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
  const attempted = [];
  const transport = async (url, opts) => {
@@ -298,7 +298,7 @@ test("Restart profile rotation keeps every free Gemini fallback and never reache
 });
 test("Paid Gemini key 1 is never used for analysis unless paid background use is switched on", async () => {
  const run = async (extraEnv) => {
-  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", ...extraEnv };
+  const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", ...extraEnv };
   for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
   const attempted = [];
   const transport = async (url, opts) => {
@@ -322,7 +322,7 @@ test("Paid Gemini key 1 is never used for analysis unless paid background use is
 });
 test("Semantic OpenAI fallback exists only with paid background use switched on, after every Gemini key", async () => {
  const run = async (extraEnv) => {
-  const env = { GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai", ...extraEnv };
+  const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai", ...extraEnv };
   const attempted = [];
   const transport = async (url, opts) => {
    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
@@ -676,4 +676,77 @@ test("When every pair rests, the analysis fails as 'transient' so the job waits 
 
 test("proxy.js hands the shared ledger to the sheet analysis", () => {
   assert.match(serverSource, /registerBondAnalysis\(app, \{[^}]*ledger: GEMINI_LEDGER \}\)/);
+});
+
+/* ---------- when one Gemini model is overloaded or spent, sheet analysis moves to the next model ---------- */
+
+const modelOfUrl = (url) => decodeURIComponent(url.split("/models/")[1].split(":")[0]);
+function ladderRun({ env = {}, answer, ledger = null, validate = (value) => assert.equal(value.ok, true) }) {
+  const attempted = [], bodies = [];
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) {
+      const key = opts.headers["x-goog-api-key"], model = modelOfUrl(url);
+      attempted.push(model + "@" + key);
+      bodies.push({ model, body: JSON.parse(opts.body) });
+      return answer({ key, model });
+    }
+    if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+    return { choices: [{ finish_reason: "stop", message: { content: '{"ok":true}' } }] };
+  };
+  const full = { GEMINI_API_KEY_2: "g2", GEMINI_API_KEY_3: "g3", GEMINI_ANALYSIS_MODEL: "pro-x", GEMINI_MODEL: "flash-x", ...env };
+  return analyzeStructured("Complete source", { type: "object" }, validate, { env: full, transport, outputTokens: 1000, ledger }).then(
+    (result) => ({ result, attempted, bodies }), (error) => ({ error, attempted, bodies }),
+  );
+}
+const ok = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
+const quotaDay = () => Object.assign(new Error("Analysis provider HTTP 429: quota"), { status: 429, payload: { error: { details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } } });
+const busy503 = () => Object.assign(new Error("Analysis provider HTTP 503: This model is currently experiencing high demand. Spikes in demand are usually temporary."), { status: 503, payload: { error: { message: "This model is currently experiencing high demand." } } });
+
+test("Sheet analysis tries the owner's models, then the other full models, then the light ones, each model on every key before the next", async () => {
+  const out = await ladderRun({ answer: () => { throw quotaDay(); } });
+  const models = [...new Set(out.attempted.map((row) => row.split("@")[0]))];
+  assert.deepEqual(models, ["pro-x", "flash-x", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
+  assert.deepEqual(out.attempted.slice(0, 4), ["pro-x@g2", "pro-x@g3", "flash-x@g2", "flash-x@g3"], "model by model");
+  assert.equal(out.attempted.length, 14, "seven models on two keys");
+});
+
+test("A model that is overloaded (503 high demand) is not asked again on the other keys: the next model answers", async () => {
+  const ledger = createGeminiLedger();
+  const out = await ladderRun({ ledger, answer: ({ model }) => { if (model === "pro-x") throw quotaDay(); if (model === "flash-x") throw busy503(); return ok; } });
+  assert.equal(out.result.model, "gemini-3.7-flash");
+  assert.deepEqual(out.attempted, ["pro-x@g2", "pro-x@g3", "flash-x@g2", "gemini-3.7-flash@g2"], "flash-x was tried once, not on every key");
+  assert.ok(ledger.restMs("g3", "flash-x") > 0, "and the whole model rests for a minute");
+});
+
+test("The result says which model of the ladder finally read the sheet", async () => {
+  const out = await ladderRun({ answer: ({ model }) => { if (/lite/.test(model)) return ok; throw busy503(); } });
+  assert.equal(out.result.model, "gemini-3.5-flash-lite");
+});
+
+test("With no Gemini model configured there is still nothing to try, however many keys exist", async () => {
+  const out = await ladderRun({ env: { GEMINI_ANALYSIS_MODEL: "", GEMINI_MODEL: "" }, answer: () => ok });
+  assert.match(out.error.message, /No free analysis provider is configured/);
+  assert.deepEqual(out.attempted, []);
+});
+
+test("Normalising a malformed answer uses the light Gemini models first, with a low thinking level; Groq is not needed", async () => {
+  const out = await ladderRun({
+    env: { GROQ_API_KEY: "gk", GROQ_MODEL: "groq-m" },
+    validate: (value) => assert.equal(value.ok, true),
+    answer: ({ model }) => ({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: model === "pro-x" ? '{"ok":false}' : '{"ok":true}' }] } }] }),
+  });
+  assert.equal(out.result.model, "pro-x", "the reading is still credited to the model that did it");
+  assert.equal(out.result.formatterModel, "gemini-3.5-flash-lite");
+  assert.deepEqual(out.attempted, ["pro-x@g2", "gemini-3.5-flash-lite@g2"], "no Groq call, and the repair did not start on the full models");
+  assert.equal(out.bodies[0].body.generationConfig.thinkingConfig.thinkingLevel, "HIGH");
+  assert.equal(out.bodies[1].body.generationConfig.thinkingConfig.thinkingLevel, "LOW");
+});
+
+test("A repair that Groq's free tier could never take (413) no longer ends the job: a light Gemini model does it", async () => {
+  const out = await ladderRun({
+    env: { GROQ_API_KEY: "gk", GROQ_MODEL: "groq-m" },
+    answer: ({ model }) => ({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: model === "pro-x" ? "{}" : '{"ok":true}' }] } }] }),
+  });
+  assert.equal(out.result.formatterProvider, "gemini");
 });

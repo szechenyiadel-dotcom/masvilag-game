@@ -562,3 +562,15 @@ test("The chain keeps its order except that refusers go to the end; if all refus
   assert.deepEqual(orderByRefusals(["a", "b"], "dm", null), ["a", "b"]);
   assert.deepEqual(orderByRefusals(undefined, "dm", tracker), []);
 });
+
+test("A 503 'high demand' is about the model, not the key: it rests that model on every key for a minute", () => {
+  const clock = { t: 1_000_000 };
+  const ledger = createGeminiLedger({ now: () => clock.t });
+  const outcome = ledger.fail("k1", "gemini-3.8-flash", { status: 503, message: "This model is currently experiencing high demand. Spikes in demand are usually temporary." });
+  assert.deepEqual([outcome.level, outcome.metric, outcome.restMs, outcome.retryable], ["model-busy", "busy", 60000, true]);
+  assert.equal(ledger.restMs("k2", "gemini-3.8-flash"), 60000, "another key, same model");
+  assert.equal(ledger.restMs("k1", "gemini-3.7-flash"), 0, "another model");
+  clock.t += 61000;
+  assert.equal(ledger.restMs("k2", "gemini-3.8-flash"), 0, "a minute later it is tried again");
+  assert.equal(ledger.fail("k1", "m", { status: 503, message: "Service Unavailable" }).metric, "unavailable", "a plain 503 keeps the run-of-failures rule");
+});
