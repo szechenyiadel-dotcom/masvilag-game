@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import { registerBondAnalysis, analyzeStructured, strangerBond } from "../server/bondAnalysis.js";
 import { EXTRACT_PROMPT, BASELINE_PROMPT, validateBonds } from "../src/bondAnalysis.js";
-import { fullSheetText, relationshipSourceText, relationshipFields, characterIdentities, rebuildBondGraph, installBondGraph, analysisReady, bondSourceFingerprint } from "../src/bondClient.js";
+import { fullSheetText, relationshipSourceText, relationshipFields, characterIdentities, rebuildBondGraph, installBondGraph, analysisReady, bondSourceFingerprint, staleReason } from "../src/bondClient.js";
 
 // The whole path: real client -> real Express handler -> in-memory cache table ->
 // scripted "model". The model returns valid output derived from the prompt, so the
@@ -831,4 +831,42 @@ test("The rule-written texts satisfy the same checks as a model's answer, in Hun
     assert.ok(bond.summary.includes("Anna Kiss") && bond.summary.includes("Béla Nagy"), language);
   }
   assert.equal(strangerBond("a", "b", "X Y", "Z W", "English").type, "neutral");
+});
+
+/* ---------- "not ready" can be explained ---------- */
+
+test("The stored analysis remembers each character's sheet, so a stale reading can say which one changed", async () => {
+  const sim = await start();
+  try {
+    const chars = [named("angela", "Angela Silverman"), named("cara", "Cara Angeles"), named("dave", "Dave Okonkwo")];
+    const world = { chars };
+    assert.equal(staleReason(world, subjects), "no analysis yet");
+    installBondGraph(world, await sim.rebuildWorld(world), subjects);
+    assert.deepEqual(Object.keys(world.bondAnalysis.sources).sort(), ["angela", "cara", "dave"]);
+    assert.match(staleReason(world, subjects), /^current/);
+    const edited = { ...world, chars: chars.map((c) => (c.id === "cara" ? { ...c, connections: "Más szöveg." } : c)) };
+    assert.equal(staleReason(edited, subjects), "changed: cara");
+    assert.equal(staleReason({ ...world, chars: [...chars, named("eli", "Eli Vance")] }, subjects), "added: eli");
+    assert.equal(staleReason({ ...world, chars: chars.slice(0, 2) }, subjects), "removed: dave");
+    assert.equal(staleReason({ ...world, bondAnalysis: { ...world.bondAnalysis, refreshPending: true } }, subjects), "placeholder analysis (refresh pending)");
+    assert.match(staleReason({ ...world, bondAnalysis: { ...world.bondAnalysis, sources: undefined }, chars: [...chars.slice(0, 2), named("dave", "Dave Okonkwo", "Más.")] }, subjects), /no per-character record/);
+  } finally { await sim.close(); }
+});
+
+test("A reading says why it was needed in its first request, and the server logs it once per sheet", async () => {
+  const sim = await start();
+  const logged = [];
+  const info = console.info; console.info = (...args) => logged.push(args.join(" "));
+  try {
+    const chars = [named("angela", "Angela Silverman"), named("cara", "Cara Angeles")];
+    const world = { chars };
+    installBondGraph(world, await sim.rebuildWorld(world), subjects);
+    sim.reset();
+    const edited = { ...world, chars: chars.map((c) => (c.id === "cara" ? { ...c, connections: "Más szöveg." } : c)) };
+    await sim.rebuildWorld(edited);
+    const firstProfiles = sim.bodies.filter((body) => body.stage === "profile" && !body.poll);
+    assert.ok(firstProfiles.length > 0 && firstProfiles.every((body) => body.why === "changed: cara"));
+    assert.ok(sim.bodies.filter((body) => body.stage === "baseline" || body.poll).every((body) => body.why === undefined), "only the profile requests carry it");
+    assert.ok(logged.some((line) => /\[bond-analysis-why\] cara changed: cara/.test(line)), logged.filter((l) => /why/.test(l)).join(" | "));
+  } finally { console.info = info; await sim.close(); }
 });
