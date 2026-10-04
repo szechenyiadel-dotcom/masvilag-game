@@ -3160,6 +3160,48 @@ function disrespectsAuthority(w, speakerId, addresseeId, text) {
   if (FIXED_BONDS.indexOf(String(rel.bond || "")) >= 0 || /anya|apa|sz[uü]l[oő]|fia|l[aá]nya|parent|father|mother|dad|mom|son|daughter/i.test(String(rel.bond || "") + " " + String(rel.role || ""))) return false;
   return true;
 }
+/* CLAUDE FIX R67: people who can't stand each other do not leave sweet comments for
+   each other. Toward someone they dislike a character is cold, curt, sarcastic or
+   hostile — a warm, supportive or complimenting line to them is dropped. A love-hate
+   pair (real romantic stake) is exempt. */
+const WARM_COMMENT_RE = /\b(?:love (?:this|it|you|that|u)|loving this|adore|proud of (?:you|u)|so proud|so happy for|happy for (?:you|u)|congrat(?:s|ulations)|you look (?:great|amazing|beautiful|gorgeous|stunning|good|incredible|perfect)|looking (?:good|great|amazing|gorgeous|fine)|beautiful|gorgeous|stunning|so cute|cutie|you'?re (?:amazing|the best|so sweet|incredible|perfect)|so sweet|sweetest|amazing|iconic|slay(?:ed|ing)?|queen|rooting for (?:you|u)|you got this|well done|good job|nice one|legend|so good|miss (?:you|u)|hugs?|xoxo|szeretlek|im[aá]dom|im[aá]dlak|b[uü]szke vagyok|gratul[aá]lok|cuki|csod[aá]s|csod[aá]latos|nagyon sz[eé]p|hi[aá]nyzol|puszi)\b|gy[oö]ny[oö]r[uű]|❤️|❤|🥰|😍|💖|💕|💗|🫶|😘|🤍|💜|💙/iu;
+const SARCASM_MARK_RE = /🙄|💀|🤡|😒|🥱|😏|\b(?:sure(?: jan)?|yeah,? right|as if|whatever|for once|i guess|apparently|not that anyone asked|said no one|wow\.|cute\.|k\.|lol|lmf?ao|ugh|eww?)\b|\b(?:persze|na persze|mindegy|ja,? biztos)\b/iu;
+function cannotStandForComments(w, actorId, targetId) {
+  if (!w || !actorId || !targetId || actorId === targetId) return false;
+  let hostile = false;
+  try { hostile = relationshipIsHostile(w, actorId, targetId); } catch (error) { hostile = false; }
+  if (!hostile) {
+    const rel = getRel(w, actorId, targetId) || EMPTY_REL;
+    const text = [rel.bond, rel.type, rel.mood, rel.label].filter(Boolean).join(" ");
+    hostile = /can'?t stand|cannot stand|dislik|despis|loath|detest|resent|disdain|nem b[ií]r|nem kedvel|ki nem [aá]ll|ellenszenv/i.test(text);
+  }
+  if (!hostile) return false;
+  try {
+    const stake = romanticStakeForObserver(w, actorId, targetId);
+    if (stake && ((Number(stake.stake) || 0) >= 3 || stake.label === "romantic-fixation")) return false;
+  } catch (error) { /* no romantic reading: stays hostile */ }
+  return true;
+}
+function warmLineToSomeoneTheyCannotStand(w, speakerId, addresseeId, text) {
+  if (!w || !speakerId || !addresseeId || speakerId === addresseeId || isHuman(w, speakerId)) return false;
+  const value = String(text || "").replace(/[’‘]/g, "'");
+  if (!WARM_COMMENT_RE.test(value) || SARCASM_MARK_RE.test(value)) return false;
+  try { if (socialFriendHostilitySignal(value)) return false; } catch (error) { /* keep checking */ }
+  return cannotStandForComments(w, speakerId, addresseeId);
+}
+function hostileCommentPairsInstruction(w, participantIds = [], commenterIds = null) {
+  const ids = [...new Set([...(Array.isArray(commenterIds) ? commenterIds : []), ...(Array.isArray(participantIds) ? participantIds : [])])].filter(Boolean);
+  const writers = (Array.isArray(commenterIds) && commenterIds.length ? commenterIds : ids).filter((id) => id && !isHuman(w, id));
+  const lines = [];
+  writers.forEach((a) => ids.forEach((b) => {
+    if (a === b || lines.length >= 12) return;
+    if (cannotStandForComments(w, a, b)) lines.push("- " + nameOfIn(w, a) + " can't stand " + nameOfIn(w, b));
+  }));
+  if (!lines.length) return "";
+  return "\n\nWHO CAN'T STAND WHOM IN THIS THREAD:\n" + lines.join("\n") +
+    "\nToward someone they can't stand a character is never warm, sweet, supportive, flattering or complimentary. They are cold, curt, sarcastic, dismissive, backhanded or openly hostile — in their own voice — or they leave no comment at all.\n";
+}
+
 function characterIsSenseiRank(w, c) {
   if (!c) return false;
   try { if (characterIsSensei(c, w)) return true; } catch (error) { /* fall through */ }
@@ -3244,6 +3286,11 @@ function filterDisrespectToAuthority(n, rows, addresseeOf) {
     const to = addresseeOf(row);
     if (who && to && disrespectsAuthority(n, who, to, row.text)) {
       console.info("[rank] dropped a disrespectful line to a sensei", "speaker=" + who, "sensei=" + to, String(row.text).slice(0, 120));
+      return false;
+    }
+    /* R67 */
+    if (who && to && warmLineToSomeoneTheyCannotStand(n, who, to, row.text)) {
+      console.info("[hostile-warmth] dropped a sweet comment to someone the speaker can't stand", "speaker=" + who, "to=" + to, String(row.text).slice(0, 120));
       return false;
     }
     return true;
@@ -8927,7 +8974,10 @@ async function askWorldJSONInteractive(
 function withCommentTone(source, w, prompt, options) {
   const { participants, commenters, ...rest } = options || {};
   if (String(source || "") !== "comments" || (!participants && !commenters)) return { prompt, options: rest };
-  return { prompt: insertBeforeProtectedTail(prompt, matureCommentInstruction(w, participants || [], commenters || null)), options: rest };
+  /* R67: who can't stand whom among the people of this thread */
+  let hostile = "";
+  try { if (typeof hostileCommentPairsInstruction === "function") hostile = hostileCommentPairsInstruction(w, participants || [], commenters || null); } catch (error) { hostile = ""; }
+  return { prompt: insertBeforeProtectedTail(prompt, matureCommentInstruction(w, participants || [], commenters || null) + hostile), options: rest };
 }
 
 function askWorldWritingJSON(source, w, system, prompt, options = {}) {
