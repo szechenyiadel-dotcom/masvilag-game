@@ -71,17 +71,17 @@ test("DM uses Dolphin key 1, Venice key 2, then Mistral; Nemotron is reserved fo
     for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
     assert.ok(!background.includes("openrouter3"), `${source} must not use Nemotron`);
   }
-  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3"]);
+  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2"]);
   assert.deepEqual(order("sheet-summary"), ["gemini", "openrouter3"]);
   assert.deepEqual(Array.from(FREE_WRITING_CHAIN), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
 });
 
-test("Feed uses free Nemotron after Gemini and before OpenAI", () => {
+test("Feed uses free Nemotron after Gemini, then the other free models, and OpenAI last", () => {
   const withFree = gate(ENV, () => ok("x"));
-  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["gemini", "openrouter3"]);
+  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2"]);
   const paidGeminiOnly = gate({ ...ENV, GEMINI_API_KEY_2: "" }, () => ok("x"));
-  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter3"]);
-  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post", { foreground: true }).body)), ["gemini", "openrouter3", "openai"]);
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter3", "openrouter", "openrouter2", "groq", "groq2"]);
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post", { foreground: true }).body)), ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2", "openai"]);
 });
 
 test("Background request with every free provider rate-limited WAITS: a 503 with Retry-After, no paid call", async () => {
@@ -92,7 +92,7 @@ test("Background request with every free provider rate-limited WAITS: a 503 with
   assert.equal(result.waiting, true);
   assert.ok(Number(result.retryAfter) >= 20, "waits at least 20 s, got " + result.retryAfter);
   assert.equal(result.payload.error.type, "free_ai_waiting");
-  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3"]);
+  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2"]);
   assert.ok(!calls.includes("openai") && !calls.includes("anthropic") && !calls.includes("mistral"), "paid providers called: " + calls);
 });
 
@@ -151,7 +151,7 @@ test("A player waiting on a DM still starts on Dolphin", async () => {
 
 test("AI_ALLOW_PAID_BACKGROUND=1 is the only way background work reaches paid providers", () => {
   const { context } = gate({ ...ENV, AI_ALLOW_PAID_BACKGROUND: "1" }, () => ok("x"));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["gemini", "openrouter3", "openai"]);
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2", "openai"]);
 });
 
 test("Gemini quota, credit and key errors never rest or switch off the whole provider: the ledger rests the exact pair", () => {
@@ -254,7 +254,7 @@ test("Everything that gives a character a voice keeps its own chain, Groq only a
   assert.equal(order("dm")[0], "openrouter-dm-dolphin");
   assert.equal(order("scene")[0], "mistral");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "openrouter", source);
-  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3"]);
+  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2"]);
   assert.deepEqual(order("sheet-summary"), ["gemini", "openrouter3"]);
   assert.deepEqual(order("character-bible"), ["gemini", "openrouter3"]);
   for (const source of ["group-chat", "notes", "autonomy-other", "scene-roleplay"]) assert.equal(order(source)[0], "gemini", source + " starts on Gemini");

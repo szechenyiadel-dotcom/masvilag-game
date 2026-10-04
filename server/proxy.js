@@ -5638,7 +5638,8 @@ function providerAllowedForBody(provider, body) {
 /* Provider roles are intentionally strict.
    - DM: Dolphin3.0 on OPENROUTER_API_KEY -> Venice Uncensored :free on OPENROUTER_API_KEY_2 -> Mistral 1 -> Mistral 2.
    - Scene: Mistral Small 1 -> Mistral Small 2.
-   - Gemini-owned feed / character knowledge: Gemini -> Nemotron :free on OPENROUTER_API_KEY -> OpenAI.
+   - Feed: Gemini -> Nemotron :free -> openrouter/free (keys 1, 2) -> Groq 1, 2 (when it fits) -> OpenAI.
+   - Character knowledge: Gemini -> Nemotron :free on OPENROUTER_API_KEY -> OpenAI.
    - Comments/replies (player waiting or background): free OpenRouter (key 1, key 2, Nemotron) -> free Gemini -> OpenAI (paid) -> Venice on OpenRouter key 2 (paid).
    - Nemotron is reserved for the Gemini fallback chain only.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
@@ -5679,8 +5680,9 @@ function taskProviderOrder(requestedProvider, body) {
        then paid OpenRouter (Venice on key 2). */
     raw = ["openrouter", "openrouter2", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
   } else if (isFeed) {
-    /* Gemini first, then free Nemotron on OpenRouter key 1, paid OpenAI last. */
-    raw = ["gemini", "openrouter3", "openai"];
+    /* Gemini first, then free Nemotron on OpenRouter key 1, then the other free models (openrouter/free on
+       OpenRouter keys 1 and 2, Groq 1 and 2 when the request fits them), paid OpenAI last. */
+    raw = ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Canon/identity knowledge uses the same Gemini -> Nemotron -> OpenAI fallback chain. */
     raw = ["gemini", "openrouter3", "openai"];
