@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { registerBondAnalysis, analyzeStructured } from "../server/bondAnalysis.js";
-import { EXTRACT_PROMPT, BASELINE_PROMPT } from "../src/bondAnalysis.js";
+import { registerBondAnalysis, analyzeStructured, strangerBond } from "../server/bondAnalysis.js";
+import { EXTRACT_PROMPT, BASELINE_PROMPT, validateBonds } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, characterIdentities, rebuildBondGraph, installBondGraph, analysisReady, bondSourceFingerprint } from "../src/bondClient.js";
 
 // The whole path: real client -> real Express handler -> in-memory cache table ->
@@ -208,8 +208,9 @@ test("The server runs only as many heavy jobs as configured, however many are su
 test("A long roster is read as short parallel calls, and the graph is still complete", async () => {
   const sim = await start();
   try {
-    const result = await sim.rebuild(Array.from({ length: 13 }, (_, i) => person("p" + i)));
-    const sizes = sim.calls.filter((call) => call.stage === "baseline" && call.owner === "p0").map((call) => call.targets.length).sort((a, b) => b - a);
+    // Names of one letter are never taken for strangers, so every pair really goes to the model here.
+    const result = await sim.rebuild(Array.from({ length: 13 }, (_, i) => person(String.fromCharCode(97 + i))));
+    const sizes = sim.calls.filter((call) => call.stage === "baseline" && call.owner === "a").map((call) => call.targets.length).sort((a, b) => b - a);
     assert.deepEqual(sizes, [10, 2]);
     assert.equal(Object.keys(result.baselines).length, 13 * 12);
     assert.equal(result.analysis.recalculatedBonds, 13 * 12);
@@ -483,7 +484,8 @@ test("A nickname in one sheet's Connections leads to the person whose own nickna
       { id: "brent", name: "BRENT", connections: "Sima diák. Angel a legjobb barátom." },
       { id: "cara", name: "Cara Angeles", connections: "Sima diák." },
     ];
-    await sim.rebuild(chars);
+    const result = await sim.rebuild(chars);
+    assert.match(result.baselines["brent>cara"].summary, /BRENT és Cara Angeles nem állnak személyes kapcsolatban/, "she is written by rule, with her full name");
 
     const request = sim.bodies.find((body) => body.stage === "baseline" && body.owner === "brent");
     assert.deepEqual(request.identities.angela, { name: "Angela Silverman", aliases: ["Angel"] });
@@ -494,7 +496,7 @@ test("A nickname in one sheet's Connections leads to the person whose own nickna
     const angela = payload.roster.find((card) => card.id === "angela");
     assert.equal(angela.fullName, "Angela Silverman");
     assert.deepEqual(angela.names.slice(0, 2), ["Angela Silverman", "Angel"], "full name first, then the nickname");
-    assert.equal(payload.roster.find((card) => card.id === "cara").fullName, "Cara Angeles");
+    assert.equal(payload.roster.find((card) => card.id === "cara"), undefined, "Cara is not named anywhere: no model is asked about her");
   } finally { await sim.close(); }
 });
 
@@ -510,10 +512,9 @@ test("Changing only a nickname changes who a mention resolves to, so the pair is
     await sim.rebuild(chars("Angel"));
     assert.equal(sim.calls.length, 0, "nothing changed, nothing read");
     sim.reset();
-    await sim.rebuild(chars("Angie"));
-    const reread = sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent");
-    assert.ok(reread, "the pair Brent -> Angela is read again, because 'Angel' no longer names her");
-    assert.deepEqual(reread.payload.profile.mentions.map((row) => row.targetId), [null]);
+    const result = await sim.rebuild(chars("Angie"));
+    assert.equal(sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent"), undefined, "no model is asked: 'Angel' no longer names anyone in the cast");
+    assert.match(result.baselines["brent>angela"].summary, /nem állnak személyes kapcsolatban/, "the pair Brent -> Angela is worked out again, and is now a stranger pair");
   } finally { await sim.close(); }
 });
 
@@ -745,4 +746,89 @@ test("A character read again on purpose gets the fresh bonds; the others keep wh
   assert.deepEqual(world.relationshipHistory["a>b"], [{ note: "keep" }]);
   assert.equal(world.officialRelationships["c>b"], undefined);
   assert.deepEqual(world.bondAnalysis.generations, { c: "t" });
+});
+
+/* ---------- a pair that nothing connects is written by rule, not by a model ---------- */
+
+const named = (id, name, connections = "Sima diák.", extra = {}) => ({ id, name, connections, ...extra });
+
+test("Only the pairs that something connects reach a model; the rest are written at once by rule", async () => {
+  const sim = await start({ mentions: { brent: "Angela Silverman" } });
+  try {
+    const chars = [
+      named("angela", "Angela Silverman"),
+      named("brent", "Brent Holloway", "Sima diák. Angela Silverman a barátom."),
+      named("cara", "Cara Angeles"),
+      named("dave", "Dave Okonkwo"),
+    ];
+    const result = await sim.rebuild(chars);
+    const askedAbout = sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]);
+    assert.deepEqual(askedAbout, [["brent", ["angela"]]], "one model call, for the one pair that is named");
+    assert.equal(Object.keys(result.baselines).length, 12, "the graph is still complete");
+    const stranger = result.baselines["cara>dave"];
+    assert.equal(stranger.type, "semleges");
+    assert.match(stranger.summary, /Cara Angeles és Dave Okonkwo nem állnak személyes kapcsolatban/);
+    assert.deepEqual(stranger.levels, { sentiment: 0, trust: 0, attraction: 0, tension: 0 });
+    assert.equal(result.baselines["brent>cara"].hiddenFeelings, null);
+  } finally { await sim.close(); }
+});
+
+test("A name in the text counts however it is written: nickname, first name, other case or accents", async () => {
+  const sim = await start();
+  try {
+    const chars = [
+      named("agnes", "Ágnes Kovács", "Sima diák.", { nick: "Ági" }),
+      named("brent", "Brent Holloway", "Sima diák. Az AGNES jó fej, Ági is."),
+      named("cara", "Cara Angeles", "Sima diák. Ági a barátom."),
+      named("dave", "Dave Okonkwo", "Sima diák. Valaki másról írok."),
+    ];
+    await sim.rebuild(chars);
+    const asked = Object.fromEntries(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]));
+    assert.deepEqual(asked.brent, ["agnes"], "'AGNES' without the accent, in capitals");
+    assert.deepEqual(asked.cara, ["agnes"], "the nickname alone");
+    assert.equal(asked.dave, undefined, "nobody named: nothing to ask");
+    assert.equal(asked.agnes, undefined);
+  } finally { await sim.close(); }
+});
+
+test("A pair is never taken for strangers when a shared group joins them or a name is too short to be sure of", async () => {
+  const sim = await start();
+  try {
+    const chars = [
+      named("alma", "Alma Kovács", "Cobra Kai tag."),
+      named("bela", "Béla Szabó", "Cobra Kai tag."),
+      named("cili", "Cili Nagy"),
+      named("jo", "Jo"),
+    ];
+    await sim.rebuild(chars);
+    const asked = Object.fromEntries(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]));
+    assert.deepEqual(asked.alma, ["bela", "jo"], "same dojo, and the two-letter name 'Jo' cannot be ruled out");
+    assert.deepEqual(asked.bela, ["alma", "jo"]);
+    assert.deepEqual(asked.cili, ["jo"], "only the short name is left to the model");
+    assert.equal(asked.jo, undefined, "a short name only matters for the one who is named, not for the one who writes");
+  } finally { await sim.close(); }
+});
+
+test("A rule-written pair is stored like any other, so a later request finds everything cached", async () => {
+  const sim = await start();
+  try {
+    const chars = [named("angela", "Angela Silverman"), named("cara", "Cara Angeles"), named("dave", "Dave Okonkwo")];
+    await sim.rebuild(chars);
+    assert.equal(sim.calls.filter((call) => call.stage === "baseline").length, 0, "no model at all for a cast nobody mentions");
+    const pairRows = [...sim.store.values()].filter((row) => row.stage === "pair");
+    assert.equal(pairRows.length, 6);
+    assert.ok(pairRows.every((row) => row.provider === "rule"));
+    sim.reset();
+    await sim.rebuild(chars);
+    assert.equal(sim.calls.length, 0);
+  } finally { await sim.close(); }
+});
+
+test("The rule-written texts satisfy the same checks as a model's answer, in Hungarian and in English", () => {
+  for (const language of ["Hungarian", "English"]) {
+    const bond = strangerBond("a", "b", "Anna Kiss", "Béla Nagy", language);
+    validateBonds({ bonds: [bond] }, "a", [{ id: "b" }], "Sima diák.", { b: [] }, ["a", "b"]);
+    assert.ok(bond.summary.includes("Anna Kiss") && bond.summary.includes("Béla Nagy"), language);
+  }
+  assert.equal(strangerBond("a", "b", "X Y", "Z W", "English").type, "neutral");
 });

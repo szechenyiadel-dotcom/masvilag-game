@@ -132,8 +132,8 @@ const ANALYSIS_CONCURRENCY = 8;
 // on one bond and then has to be written again in full; short arrays run in
 // parallel and a failure only repeats its own part.
 const TARGETS_PER_CALL = 10;
-const POLL_FIRST_MS = 1500;
-const POLL_MAX_MS = 4000;
+const POLL_FIRST_MS = 800;
+const POLL_MAX_MS = 2000;
 const MAX_TRANSIENT_FAILURES = 20;
 
 // A real HTTP status decides. Without one (phone lost signal, server restarting)
