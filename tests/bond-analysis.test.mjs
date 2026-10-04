@@ -876,3 +876,25 @@ test("The prompt asks for compact but always filled texts, and still lets the un
   assert.match(BASELINE_PROMPT, /type, summary, description and publicFace are ALWAYS filled with real sentences/);
   assert.match(BASELINE_PROMPT, /hiddenFeelings\/history\/dynamics\/wants: null without support/);
 });
+
+/* ---------- a reading that cannot be repaired must not run up paid calls ---------- */
+
+test("The paid repair is asked once per reading, however many models give an answer that does not validate", async () => {
+  const env = sevenKeys({ OPENAI_API_KEY: "oa", OPENAI_SCHEMA_MODEL: "schema-openai", GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off" });
+  let openaiCalls = 0;
+  const logged = [];
+  const warn = console.warn; console.warn = (...args) => logged.push(args.join(" "));
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] };
+    if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+    openaiCalls += 1;
+    return { choices: [{ finish_reason: "stop", message: { content: '{"ok":false}' } }] };
+  };
+  try {
+    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 }), /No analysis provider completed/);
+  } finally { console.warn = warn; }
+  assert.equal(openaiCalls, 2, "one paid repair, plus the one paid semantic reading itself");
+  assert.ok(logged.some((line) => /^\[bond-analysis-invalid\] gemini\/gemini-3\.8-flash \[GEMINI_API_KEY_2\] /.test(line)), "what the model got wrong is visible at once: " + logged.slice(0, 2).join(" | "));
+  assert.ok(logged.every((line) => !/\bk[2-8]\b|oa\b/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
+});

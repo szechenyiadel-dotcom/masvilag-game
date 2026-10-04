@@ -257,7 +257,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
   return data.choices[0].message?.content;
 }
 
-async function repairStructuredOutput(raw, originalPrompt, schema, validate, options, transport, validationError, failures) {
+async function repairStructuredOutput(raw, originalPrompt, schema, validate, options, transport, validationError, failures, paidRepairs = { left: 1 }) {
   const env = options.env || process.env;
   const candidates = options.schemaCandidates || (options.candidates ? [] : providerCandidates(env, "schema"));
   if (!candidates.length || !String(raw || "").trim()) return null;
@@ -276,6 +276,15 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
   ].join("\n\n");
 
   for (const candidate of candidates) {
+    /* The paid repair is asked once per analysis, not once per semantic candidate: a reading that no repair can fix
+       must not run up a paid call for every model and key it passes through. */
+    if (candidate.name === "openai") {
+      if (paidRepairs.left <= 0) {
+        failures.push({ phase: "schema-repair", provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: null, transient: false, reason: "paid repair already tried once for this reading" });
+        continue;
+      }
+      paidRepairs.left -= 1;
+    }
     try {
       const capability = await modelCapabilities(candidate, repairPrompt, schema, transport);
       const outputTokens = options.outputTokens || 64000;
@@ -291,6 +300,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
         inputTokens: capability.inputTokens,
       };
     } catch (error) {
+      console.warn("[bond-analysis-repair-failed]", candidate.name + "/" + candidate.model, "[" + candidate.keySlot + "]", String(error.message).slice(0, 300));
       failures.push({
         phase: "schema-repair",
         provider: candidate.name,
@@ -322,6 +332,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   /* The server's shared view of which Gemini (key, model) pairs are resting: the chat, picture and memory
      code report what they learn, and this job does not knock on a spent door again (or make others do so). */
   const ledger = options.ledger || null;
+  const paidRepairs = { left: Number.isFinite(Number(options.maxPaidRepairs)) ? Number(options.maxPaidRepairs) : 1 };
   const geminiLedgerOf = (candidate) => (ledger && candidate.name === "gemini" ? ledger : null);
 
   for (const candidate of candidates) {
@@ -353,6 +364,8 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
           inputTokens: capability.inputTokens,
         };
       } catch (validationError) {
+        /* Without this a reading that keeps failing validation is invisible until the whole round ends. */
+        console.warn("[bond-analysis-invalid]", candidate.name + "/" + candidate.model, "[" + candidate.keySlot + "]", String(validationError.message).slice(0, 300));
         if (mode === "semantic") {
           const repaired = await repairStructuredOutput(
             raw,
@@ -362,7 +375,8 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
             options,
             transport,
             validationError.message,
-            failures
+            failures,
+            paidRepairs
           );
           if (repaired) {
             return {
