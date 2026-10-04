@@ -805,7 +805,7 @@ test("A reply the player reads gets half again as much room under the paid ceili
 
 test("Final OpenRouter routing uses key 1 for Dolphin and Nemotron, and key 2 for Venice", () => {
   assert.match(source, /cognitivecomputations\/dolphin3\.0-mistral-24b:free/);
-  assert.match(source, /cognitivecomputations\/dolphin-mistral-24b-venice-edition:free/);
+  assert.match(source, /cognitivecomputations\/dolphin-mistral-24b-venice-edition/);
   assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
   assert.match(source, /proxyCompatibleMessage\("openrouter3", process\.env\.OPENROUTER_API_KEY/);
