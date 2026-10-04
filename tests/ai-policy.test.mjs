@@ -275,10 +275,10 @@ test("Groq pacer: a budget wait longer than the allowed time is refused at once 
 test("Models come from the free list: the writing model, two more flash models, three lite ones", () => {
   const config = geminiModelConfig({});
   assert.equal(config.primary, DEFAULT_GEMINI_PRIMARY_MODEL);
-  assert.deepEqual(config.extra, ["gemini-3.7-flash", "gemini-3.6-flash"]);
+  assert.deepEqual(config.extra, ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
   assert.deepEqual(config.lite, ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
   assert.deepEqual(Array.from(DEFAULT_GEMINI_EXTRA_MODELS).concat(Array.from(DEFAULT_GEMINI_LITE_MODELS), DEFAULT_GEMINI_PRIMARY_MODEL).sort(),
-    ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"]);
+    ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"]);
 });
 
 test("The environment can change every list, and 'off' switches one off", () => {
@@ -286,21 +286,22 @@ test("The environment can change every list, and 'off' switches one off", () => 
   assert.deepEqual([config.primary, config.deep, config.extra, config.lite], ["gemini-3.7-flash", "gemini-3.8-flash", ["a", "b", "c"], []]);
   assert.deepEqual(config.vision, ["v", "gemini-3.7-flash", "a", "b", "c"]);
   assert.equal(geminiModelConfig({ GEMINI_FALLBACK_MODEL: "old-name" }).primary, "old-name", "the old variable name still works");
-  assert.deepEqual(geminiModelConfig({ GEMINI_MODEL: "gemini-3.6-flash" }).extra, ["gemini-3.7-flash"], "the main model is not listed twice");
+  assert.deepEqual(geminiModelConfig({ GEMINI_MODEL: "gemini-3.6-flash" }).extra, ["gemini-3.7-flash", "gemini-3.5-flash"], "the main model is not listed twice");
 });
 
 test("Characters' voices and careful readings use the full models only; light utility work starts on the lite ones", () => {
   const config = geminiModelConfig({});
-  const full = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
+  const full = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"];
   for (const source of ["dm", "scene", "comments", "feed-post", "group-chat", "notes", "ambient-popup", "gossip-propagation", "sheet-summary", "character-bible", "askWorldJSON", ""]) {
     assert.deepEqual(geminiModelLadder(config, { source }), full, source);
   }
-  assert.deepEqual(geminiModelLadder(config, { source: "character-bible", quality: "deep" }), full);
+  assert.deepEqual(geminiModelLadder(config, { source: "character-bible", quality: "deep" }), [...full, ...config.lite], "a whole-sheet reading falls back to the light models after every full one");
+  assert.deepEqual(geminiModelLadder(config, { source: "sheet-summary", quality: "deep" }), [...full, ...config.lite]);
   assert.deepEqual(geminiModelLadder(config, { source: "meaning-analysis", quality: "deep" }), full, "a careful reading is never given to a lite model");
   for (const source of ["meaning-analysis", "display-translate", "music-note", "relationship-impact"]) {
     assert.deepEqual(geminiModelLadder(config, { source }), [...config.lite, ...full], source);
   }
-  assert.deepEqual(geminiModelLadder(geminiModelConfig({ GEMINI_DEEP_MODEL: "gemini-3.7-flash" }), { quality: "deep" }), ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash"]);
+  assert.deepEqual(geminiModelLadder(geminiModelConfig({ GEMINI_DEEP_MODEL: "gemini-3.7-flash" }), { quality: "deep" }), ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
 });
 
 test("A 429 reports the real size of the quota, the model it counted on, and when it comes back", () => {

@@ -1094,6 +1094,35 @@ test("The context carries what a model needs, not the quotes a reading was check
   assert.ok(bond.description !== undefined && bond.levels, "the bond itself stays complete");
 });
 
+test("The context lists the bonds first and the profiles last, and says each bond only once", () => {
+  const world = fatWorld();
+  world.rels["ai-a>ai-b"].hiddenFeelings = "Titkos terv";
+  world.rels["ai-a>ai-b"].whoKnows = ["ai-a"];
+  world.rels["ai-a>ai-b"].description = "UNIQUE-DESCRIPTION: fake boyfriend arrangement";
+  const text = bondGenerationContext(world, ["ai-a", "ai-b"]);
+  const keys = Object.keys(JSON.parse(text.split("[[FULL_BOND_CONTEXT]]\n")[1].split("\n[[/FULL_BOND_CONTEXT]]")[0]));
+  assert.deepEqual(keys, ["rules", "currentBonds", "knowledgeByActor", "profiles"], "what matters most comes first, so a cut takes the profiles");
+  assert.equal(text.split("UNIQUE-DESCRIPTION").length - 1, 1, "the long description is in currentBonds only");
+  const scoped = contextOf(world, ["ai-a", "ai-b"]);
+  assert.deepEqual(scoped.knowledgeByActor["ai-a"]["ai-a>ai-b"], { from: "ai-a", to: "ai-b", hiddenFeelings: "Titkos terv", whoKnows: ["ai-a"] }, "who knows what, without the rest of the bond");
+  assert.deepEqual(Object.keys(scoped.knowledgeByActor["ai-b"]["ai-a>ai-b"]).sort(), ["from", "publicFace", "to"], "the one who does not know sees the public face only");
+});
+
+test("A profile's mentions and facts about people outside the call are left out; unresolved ones stay", () => {
+  const world = fatWorld();
+  world.bondAnalysis.profiles["ai-a"].profile.mentions = [
+    { targetName: "Béla", targetId: "ai-b", whatIsSaid: "IN-SCOPE" },
+    { targetName: "Sensei", targetId: "sensei", whatIsSaid: "OUT-OF-SCOPE" },
+    { targetName: "A bolt", targetId: null, whatIsSaid: "UNRESOLVED" },
+  ];
+  world.bondAnalysis.profiles["ai-a"].profile.facts = [{ targetName: "Sensei", targetId: "sensei", forward: "OUT-FACT" }, { targetName: "Béla", targetId: "ai-b", forward: "IN-FACT" }];
+  const text = bondGenerationContext(world, ["ai-a", "ai-b"]);
+  for (const kept of ["IN-SCOPE", "UNRESOLVED", "IN-FACT"]) assert.ok(text.includes(kept), kept);
+  for (const dropped of ["OUT-OF-SCOPE", "OUT-FACT"]) assert.ok(!text.includes(dropped), dropped);
+  const everyone = bondGenerationContext(world, null);
+  assert.ok(everyone.includes("OUT-OF-SCOPE") && everyone.includes("OUT-FACT"), "no scope: nothing is left out");
+});
+
 test("Who a call is about: the player, the characters it names, anyone its text mentions, and nobody means everybody", () => {
   const people = [
     { id: "me", name: "Tandy Bowen" }, { id: "brent", name: "Brent LaRusso", nick: "Brent" },

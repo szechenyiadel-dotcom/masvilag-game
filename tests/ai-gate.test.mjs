@@ -426,7 +426,7 @@ test("Gemini: a character's voice never lands on a lite model, light utility wor
   /* everything is spent except the lite models: a voice request waits, a translation is answered */
   const onlyLite = ({ model }) => (/lite/.test(model) ? geminiOk() : geminiDayLimit(model));
   const spent = geminiPath({ respond: onlyLite });
-  for (const key of ["f2", "f3", "f4"]) for (const model of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) spent.ledger.fail(key, model, { status: 429, payload: geminiDayLimit(model).payload });
+  for (const key of ["f2", "f3", "f4"]) for (const model of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]) spent.ledger.fail(key, model, { status: 429, payload: geminiDayLimit(model).payload });
   const voice = await spent.context.proxyGeminiMessage(geminiBody({ source: "dm" }));
   assert.equal(voice.ok, false);
   assert.equal(voice.status, 429, "the voice waits rather than being given to a lite model");
@@ -736,6 +736,40 @@ test("A paid DM request keeps all 14 turns of the conversation, the rules and th
   assert.ok(message.endsWith('yeah I\'m here... "boyfriend"'), "and the player's newest line is the very last thing");
   assert.ok(message.includes("VOICE / WRITING-STYLE CARD"), "with the voice card");
   assert.ok(textLength(sent[0]) <= 91000, "all of it still within the (player-facing) paid ceiling");
+});
+
+test("A paid DM request keeps the private bond context of the two people whole, before the tail, however much filler surrounds it", async () => {
+  const bond = "\n[[FULL_BOND_CONTEXT]]\n" + JSON.stringify({
+    rules: "r".repeat(1200),
+    currentBonds: { "brent>tandy": { summary: "Brent and Tandy are FAKE BOYFRIEND and girlfriend: they pretend to date, and both of them know it is staged.", description: "d".repeat(3000), whoKnows: ["brent", "tandy"] } },
+    profiles: { brent: { facts: "f".repeat(20000) } },
+  }) + "\n[[/FULL_BOND_CONTEXT]]";
+  const body = dmBody();
+  const content = body.messages[0].content;
+  const at = content.indexOf("\n\n[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]");
+  body.messages[0].content = content.slice(0, at) + bond + content.slice(at);
+  const { context, sent } = groqPath();
+  const result = await context.proxyCompatibleMessage("mistral2", "key", "m", "https://api.mistral.ai/x", body);
+  assert.equal(result.ok, true);
+  const message = sent[0].messages.map((row) => row.content).join("\n");
+  assert.ok(message.includes("FAKE BOYFRIEND and girlfriend: they pretend to date"), "the arrangement between the two is still there");
+  assert.ok(message.includes("[[/FULL_BOND_CONTEXT]]"), "and the block is closed");
+  assert.ok(message.indexOf("[[/FULL_BOND_CONTEXT]]") < message.indexOf("[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]"), "it sits before the tail");
+  assert.ok(message.endsWith('yeah I\'m here... "boyfriend"'), "the newest line is still the very last thing");
+  for (let i = 1; i <= 14; i += 1) assert.ok(message.includes("H" + String(i).padStart(2, "0") + " "), "turn " + i);
+  assert.ok(textLength(sent[0]) <= 91000, "within the ceiling");
+});
+
+test("An oversized bond context is cut from its end (profiles go first), keeps its close, and never takes more than 40% of the room", () => {
+  const { context } = groqPath();
+  const block = "[[FULL_BOND_CONTEXT]]\n" + '{"rules":"R","currentBonds":{"a>b":"KEEP-ME"},"profiles":"' + "p".repeat(60000) + '"}\n[[/FULL_BOND_CONTEXT]]';
+  const text = "BODY ".repeat(20000) + "\n" + block + "\n\n[[PROTECTED_TAIL]]\nnewest line";
+  const out = context.preservePromptEdges(text, 20000);
+  assert.ok(out.length <= 20000, "length " + out.length);
+  assert.ok(out.includes("KEEP-ME") && out.includes("[[/FULL_BOND_CONTEXT]]"));
+  assert.ok(out.endsWith("newest line"));
+  const kept = out.slice(out.indexOf("[[FULL_BOND_CONTEXT]]"), out.indexOf("[[/FULL_BOND_CONTEXT]]") + 22);
+  assert.ok(kept.length <= 8000, "bond share " + kept.length);
 });
 
 test("A reply the player reads gets half again as much room under the paid ceiling; other work keeps the base", async () => {
