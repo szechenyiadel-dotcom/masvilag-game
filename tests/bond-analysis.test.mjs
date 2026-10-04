@@ -1136,11 +1136,42 @@ test("Who a call is about: the player, the characters it names, anyone its text 
   assert.equal(bondScopeIds(people, { ids: ["ghost"], playerId: "me" }), null, "unknown ids count for nothing");
 });
 
+test("People read from a text are capped, the ones named last first; the caller's own list is never cut", () => {
+  const people = [{ id: "me", name: "Tandy Bowen" }, ...Array.from({ length: 12 }, (_, i) => ({ id: "p" + i, name: "Person" + String.fromCharCode(65 + i) + "xyz" }))];
+  const text = people.slice(1).map((p) => p.name).join(" and ");
+  const scope = bondScopeIds(people, { text, playerId: "me" });
+  assert.equal(scope.length, 6, "the player and five more");
+  assert.ok(scope.includes("p11") && scope.includes("p10") && !scope.includes("p0"), "the ones named last, nearest the task, win");
+  const listed = bondScopeIds(people, { ids: ["p0", "p1", "p2", "p3", "p4", "p5", "p6"], text, playerId: "me" });
+  for (const id of ["p0", "p1", "p2", "p3", "p4", "p5", "p6"]) assert.ok(listed.includes(id), id);
+});
+
+test("A bond context is never bigger than its budget, however big the cast: texts shorten, then profiles go, then only the strongest bonds stay", () => {
+  const cast = Array.from({ length: 20 }, (_, i) => "c" + i);
+  const row = (a, b) => ({ from: a, to: b, type: "friend", intensity: a === "c0" || b === "c0" ? 90 : 10, summary: "s", description: "d".repeat(1500), publicFace: "p", hiddenFeelings: "h", history: "x".repeat(900), whoKnows: [a], levels: {} });
+  const rels = Object.fromEntries(cast.flatMap((a) => cast.filter((b) => b !== a).map((b) => [a + ">" + b, row(a, b)])));
+  const profiles = Object.fromEntries(cast.map((id) => [id, { profile: { id, names: [id], mentions: cast.slice(0, 5).map((t) => ({ targetName: t, targetId: t, whatIsSaid: "w".repeat(500) })), facts: [], timeline: [{ when: "x", event: "e".repeat(800) }], groups: [] } }]));
+  const world = { bondAnalysis: { profiles }, rels, meId: "c0" };
+  for (const scope of [null, cast.slice(0, 6), ["c0", "c1"]]) {
+    const text = bondGenerationContext(world, scope);
+    assert.ok(text.length <= 30000, (scope ? scope.length : "everyone") + " people: " + text.length);
+    assert.ok(text.includes("[[/FULL_BOND_CONTEXT]]"));
+  }
+  const everyone = contextOf(world, null);
+  assert.ok(Object.keys(everyone.currentBonds).every((key) => key.startsWith("c0>") || key.endsWith(">c0")) || Object.keys(everyone.currentBonds).length > 1, "what stays are bonds, and the player's come first");
+  assert.ok(Object.keys(everyone.currentBonds).slice(0, 3).every((key) => key.startsWith("c0>") || key.endsWith(">c0")), "the player's bonds are the first to stay");
+  assert.ok(!everyone.rules.includes("knowledgeByActor is the only"), "and the rules do not point at a section that was left out");
+  const small = contextOf(world, ["c0", "c1"]);
+  assert.ok(small.profiles && small.knowledgeByActor, "a small call keeps everything");
+  assert.equal(contextOf(world, null, undefined) !== null, true);
+  assert.ok(bondGenerationContext(world, null, { budget: 0 }).length > 100000, "budget 0 switches it off");
+});
+
 test("The AI calls put the scoped bond context before the protected tail, so the newest line stays last", () => {
   const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   const fn = source.slice(source.indexOf("function bondContextFor(w, memory, prompt)"), source.indexOf("function bondContextFor(w, memory, prompt)") + 700);
   assert.match(fn, /bondScopeIds\(allSubjects\(w\)/);
-  assert.match(fn, /ids\.length \? String\(memory\.query \|\| ""\) : String\(prompt \|\| ""\)/, "with a list, the latest line names the extra people; without one, the prompt does");
+  assert.match(fn, /ids\.length \? String\(memory\.query \|\| ""\) : String\(prompt \|\| ""\)\.slice\(-8000\)/, "with a list, the latest line names the extra people; without one, the END of the prompt does (the background names everyone)");
   assert.match(fn, /playerId: w\.meId/);
   assert.equal((source.match(/insertBeforeProtectedTail\(prompt, \[memoryBlock, bondContextFor\(w, memory, prompt\)\]/g) || []).length, 2, "both ask functions");
   assert.ok(!/\) \+ bondGenerationContext\(w\)/.test(source), "nothing appends the full context after the tail any more");

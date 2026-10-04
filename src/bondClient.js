@@ -401,49 +401,96 @@ function compactBond(bond) {
 
 const foldForScope = (value) => String(value || "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 
-/* Who a prompt is about, when the caller did not say: the player plus every character whose name, nickname, username or
-   id the text mentions. Returns null when that is fewer than two people (the prompt names nobody in particular), so the
-   caller falls back to everyone. Being too inclusive only costs size; being too exclusive would drop a bond that matters. */
-export function bondScopeIds(people, { text = "", ids = [], playerId = null } = {}) {
+/* Who a prompt is about, when the caller did not say: the player plus the characters whose name, nickname, username or
+   id the text mentions, the ones named last (nearest the actual task) first, at most `max` of them. Returns null when
+   that is fewer than two people (the prompt names nobody in particular). The ids the caller names are always kept. */
+export function bondScopeIds(people, { text = "", ids = [], playerId = null, max = 6 } = {}) {
   const known = new Set(people.map((person) => person.id));
   const chosen = new Set([...(playerId ? [playerId] : []), ...ids].filter((id) => known.has(id)));
   const folded = foldForScope(text);
   if (folded) {
+    const named = [];
     for (const person of people) {
       if (chosen.has(person.id)) continue;
       const names = [person.name, person.nick, person.nickname, person.username, person.id].map((value) => String(value || "").trim()).filter(Boolean);
       const tokens = names.flatMap((name) => [name, ...(name === person.name ? name.split(/\s+/).filter((part) => part.length >= 4) : [])]).map(foldForScope).filter((token) => token.length >= 3);
-      if (tokens.some((token) => folded.includes(token))) chosen.add(person.id);
+      const at = Math.max(-1, ...tokens.map((token) => folded.lastIndexOf(token)));
+      if (at >= 0) named.push({ id: person.id, at });
     }
+    named.sort((a, b) => b.at - a.at);
+    for (const { id } of named) if (chosen.size < Math.max(max, ids.length + 1)) chosen.add(id);
   }
   return chosen.size >= 2 ? [...chosen] : null;
 }
 
+const RULES = "Full profiles/currentBonds are PRIVATE director data and override older brief, identity, bible or keyword-derived relationship hints. For each actor, knowledgeByActor is the only authority on other actors' private bond knowledge: an entry with whoKnows/hiddenFeelings is a bond that actor knows in full (all other fields as in currentBonds), an entry with only publicFace is all the actor sees of it. CURRENT directed bonds govern every actor including AI–AI. Profiles are private actor source, never shared knowledge. A character may know another's secret ONLY when their ID occurs in whoKnows. publicFace is the sole default public view. Never mirror hidden feelings, attraction or private source into reverse knowledge. A group tie does not imply friendship. Preserve all current fields; in-game evolution overrides baseline history. For every directed relationship change emit updated description (4–8 sentences), summary, publicFace, hiddenFeelings, history, dynamics, wants, status, levels and whoKnows where the event changes them, alongside existing a/b/delta/mood/why fields. PublicFace excludes private feelings; mood is private emotional state. Newly formed secrets reset witnesses to actual knowing IDs. Baselines never change during gameplay. Never reveal unknown secrets in posts, gossip, popups, chat or scenes.";
+
+export const BOND_CONTEXT_BUDGET = 30000;
+
+const clipText = (value, max) => (typeof value === "string" && value.length > max ? value.slice(0, max - 1).trimEnd() + "…" : value);
+const clipRows = (rows, max) => (Array.isArray(rows) ? rows.map((row) => (row && typeof row === "object"
+  ? Object.fromEntries(Object.entries(row).map(([key, value]) => [key, clipText(value, max)])) : clipText(row, max))) : rows);
+/* The same bond with its long texts shortened: nothing is dropped, so who is who to whom still reads in full. */
+function leanBond(bond) {
+  const { description, history, dynamics, wants, hiddenFeelings, ...rest } = compactBond(bond);
+  return { ...rest, description: clipText(description, 500), history: clipText(history, 300), dynamics: clipText(dynamics, 250), wants: clipText(wants, 250), hiddenFeelings: clipText(hiddenFeelings, 350) };
+}
+function leanProfile(profile) {
+  if (!profile || typeof profile !== "object") return profile;
+  const { timeline, groupRelations, ...rest } = profile;
+  return { ...rest, mentions: clipRows(rest.mentions, 220), facts: clipRows(rest.facts, 220), groups: clipRows(rest.groups, 120) };
+}
+
 /* scope: ids of the characters the call is about (null = everyone). The context then holds only their profiles, the
    bonds among them and what they know of each other, so it no longer grows with the size of the cast. What matters most
-   comes first (the bonds), the profiles last: when a prompt has to be cut, the end goes first. */
-export function bondGenerationContext(world, scope = null) {
+   comes first (the bonds), the profiles last: when a prompt has to be cut, the end goes first.
+   It also has a size budget: over it, the long texts are shortened, then the profiles go, and last only the bonds that
+   touch the player or are the strongest stay, so no call carries a whole cast's relationships. */
+export function bondGenerationContext(world, scope = null, { budget = BOND_CONTEXT_BUDGET } = {}) {
   if (!world.bondAnalysis) return "";
   const keep = Array.isArray(scope) && scope.length ? new Set(scope) : null;
   const inScope = (id) => !keep || keep.has(id);
   const profileIds = Object.keys(world.bondAnalysis.profiles).filter(inScope);
-  const bonds = Object.entries(world.rels || {}).filter(([, bond]) => !keep || (inScope(bond.from) && inScope(bond.to)));
+  const allBonds = Object.entries(world.rels || {}).filter(([, bond]) => !keep || (inScope(bond.from) && inScope(bond.to)));
   /* What a profile says about someone who is not part of this call is not needed here (their own bond rows carry it). */
   const aboutScope = (rows) => (Array.isArray(rows) && keep ? rows.filter((row) => !row || !row.targetId || inScope(row.targetId)) : rows);
-  const profileOf = (id) => {
+  const profileOf = (id, lean) => {
     const profile = compactProfile(world.bondAnalysis.profiles[id].profile);
-    return keep && profile && typeof profile === "object" ? { ...profile, mentions: aboutScope(profile.mentions), facts: aboutScope(profile.facts) } : profile;
+    const scoped = keep && profile && typeof profile === "object" ? { ...profile, mentions: aboutScope(profile.mentions), facts: aboutScope(profile.facts) } : profile;
+    return lean ? leanProfile(scoped) : scoped;
   };
   /* A bond the actor knows in full is listed in currentBonds already: here only the private part and who knows it. */
   const knownBy = (id, [, bond]) => (bond.from === id || bond.whoKnows?.includes(id)
-    ? { from: bond.from, to: bond.to, hiddenFeelings: bond.hiddenFeelings ?? null, whoKnows: bond.whoKnows || [] }
+    ? { from: bond.from, to: bond.to, hiddenFeelings: clipText(bond.hiddenFeelings ?? null, 350), whoKnows: bond.whoKnows || [] }
     : { from: bond.from, to: bond.to, publicFace: bond.publicFace });
-  return "\n[[FULL_BOND_CONTEXT]]\n" + JSON.stringify({
-    rules: "Full profiles/currentBonds are PRIVATE director data and override older brief, identity, bible or keyword-derived relationship hints. For each actor, knowledgeByActor is the only authority on other actors' private bond knowledge: an entry with whoKnows/hiddenFeelings is a bond that actor knows in full (all other fields as in currentBonds), an entry with only publicFace is all the actor sees of it. CURRENT directed bonds govern every actor including AI–AI. Profiles are private actor source, never shared knowledge. A character may know another's secret ONLY when their ID occurs in whoKnows. publicFace is the sole default public view. Never mirror hidden feelings, attraction or private source into reverse knowledge. A group tie does not imply friendship. Preserve all current fields; in-game evolution overrides baseline history. For every directed relationship change emit updated description (4–8 sentences), summary, publicFace, hiddenFeelings, history, dynamics, wants, status, levels and whoKnows where the event changes them, alongside existing a/b/delta/mood/why fields. PublicFace excludes private feelings; mood is private emotional state. Newly formed secrets reset witnesses to actual knowing IDs. Baselines never change during gameplay. Never reveal unknown secrets in posts, gossip, popups, chat or scenes.",
-    currentBonds: Object.fromEntries(bonds.map(([key, bond]) => [key, compactBond(bond)])),
-    knowledgeByActor: Object.fromEntries(profileIds.map((id) => [id,
+  const rulesFor = (knowledge) => {
+    const text = RULES;
+    return knowledge ? text : text.replace(/ For each actor, knowledgeByActor is the only authority[^.]*\./, " The whoKnows list of each bond is the only authority on who knows its private side.");
+  };
+  const render = ({ bonds, lean, profiles, knowledge }) => "\n[[FULL_BOND_CONTEXT]]\n" + JSON.stringify({
+    rules: rulesFor(knowledge),
+    currentBonds: Object.fromEntries(bonds.map(([key, bond]) => [key, lean ? leanBond(bond) : compactBond(bond)])),
+    ...(knowledge ? { knowledgeByActor: Object.fromEntries(profileIds.map((id) => [id,
       Object.fromEntries(bonds.filter(([, bond]) => bond.from === id || bond.to === id).map((entry) => [entry[0], knownBy(id, entry)]))
-    ])),
-    profiles: Object.fromEntries(profileIds.map((id) => [id, profileOf(id)])),
+    ])) } : {}),
+    ...(profiles ? { profiles: Object.fromEntries(profileIds.map((id) => [id, profileOf(id, lean)])) } : {}),
   }) + "\n[[/FULL_BOND_CONTEXT]]";
+
+  const steps = [
+    { bonds: allBonds, lean: false, profiles: true, knowledge: true },
+    { bonds: allBonds, lean: true, profiles: true, knowledge: true },
+    { bonds: allBonds, lean: true, profiles: false, knowledge: true },
+  ];
+  let out = "";
+  for (const step of steps) { out = render(step); if (!(budget > 0) || out.length <= budget) return out; }
+  /* Still too much: the bonds that touch the player first, then the strongest, as many as fit. */
+  const meId = world.meId;
+  const ranked = [...allBonds].sort(([, a], [, b]) => (Number(b.from === meId || b.to === meId) - Number(a.from === meId || a.to === meId)) || ((Number(b.intensity) || 0) - (Number(a.intensity) || 0)));
+  let count = ranked.length;
+  while (count > 1) {
+    count = Math.max(1, Math.floor(count * 0.8));
+    out = render({ bonds: ranked.slice(0, count), lean: true, profiles: false, knowledge: false });
+    if (out.length <= budget) break;
+  }
+  return out;
 }

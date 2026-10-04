@@ -8858,7 +8858,9 @@ async function askJSON(system, prompt, options = {}) {
    so the tail (the latest turns and the player's newest line) stays the last thing the model reads. */
 function bondContextFor(w, memory, prompt) {
   const ids = memory && Array.isArray(memory.ids) ? memory.ids : [];
-  const scope = bondScopeIds(allSubjects(w), { ids, text: ids.length ? String(memory.query || "") : String(prompt || ""), playerId: w.meId });
+  /* Without a caller's list the people are read from the END of the prompt, where the task and its participants are named; the
+     world background before it mentions the whole cast and says nothing about who this call is about. */
+  const scope = bondScopeIds(allSubjects(w), { ids, text: ids.length ? String(memory.query || "") : String(prompt || "").slice(-8000), playerId: w.meId });
   return bondGenerationContext(w, scope);
 }
 
