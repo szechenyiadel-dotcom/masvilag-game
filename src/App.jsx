@@ -32453,26 +32453,45 @@ function Bonds({ w, update, setErr }) {
 
   const me = subjects.find((x) => x.id === focus) || subjects[0];
   const others = me ? relevantOthers(w, me.id) : [];
+  const [reBusy, setReBusy] = useState(false);
+  const [reProgress, setReProgress] = useState("");
+
+  /* only: read just this character again (their sheet and the bonds they write; everyone else comes back from the
+     server's cache) and give their bonds the fresh reading, no world restart. Without it: everything again (slow). */
+  const reanalyze = async (only) => {
+    if (bondAnalysisBusy.has(w.code) || reBusy) { setErr(tt("Az elemzés már folyamatban van, kérlek várj.", "An analysis is already running, please wait.")); return; }
+    bondAnalysisBusy.add(w.code);
+    setReBusy(true);
+    setReProgress("");
+    try {
+      const result = await rebuildBondGraph(w, {
+        subjects: allSubjects, api: apiJson, language: worldLanguage(w), force: !only, only: only || null,
+        progress: ({ phase, completed, total }) => setReProgress((phase === "profile" ? tt("Lapok olvasása", "Reading sheets") : tt("Kapcsolatok", "Relationships")) + " " + completed + "/" + total),
+      });
+      update(n => installBondGraph(n, result, allSubjects, { reset: only ? [only] : [] }));
+      bondAnalysisRetry.delete(w.code);
+    } catch (error) { setErr(error.message); }
+    finally { bondAnalysisBusy.delete(w.code); setReBusy(false); setReProgress(""); }
+  };
 
   return (
     <>
       <div className="card">
-        <button className="btn tiny" onClick={async () => {
-          if (bondAnalysisBusy.has(w.code)) return;
-          bondAnalysisBusy.add(w.code);
-          try {
-            const result = await rebuildBondGraph(w, { subjects: allSubjects, api: apiJson, language: worldLanguage(w), force: true });
-            update(n => installBondGraph(n, result, allSubjects));
-            bondAnalysisRetry.delete(w.code);
-          } catch (error) { setErr(error.message); }
-          finally { bondAnalysisBusy.delete(w.code); }
-        }}>{tt("Kapcsolatok újraelemzése", "Reanalyze bonds")}</button>
+        <button className="btn tiny" disabled={reBusy} onClick={() => reanalyze(null)}>{tt("Összes kapcsolat újraelemzése (lassú)", "Re-analyze ALL bonds (slow)")}</button>
         <label className="f" style={{ marginTop: 0 }}>{tt("Kinek a kapcsolatait nézzük?", "Whose bonds are we looking at?")}</label>
         <select className="i" value={focus} onChange={(e) => setFocus(e.target.value)}>
           {subjects.map((x) => (
             <option key={x.id} value={x.id}>{x.id === w.meId ? tt(`${x.name} (te)`, `${x.name} (you)`) : x.name} — {kindOf(w, x.id)}</option>
           ))}
         </select>
+        {me ? (
+          <>
+            <button className="btn tiny" style={{ marginTop: 8 }} disabled={reBusy} onClick={() => reanalyze(me.id)}>
+              {reBusy ? <Loader2 size={12} className="spin" /> : null} {reBusy && reProgress ? reProgress : tt(`${me.name} kapcsolatainak újraelemzése`, `Re-analyze ${me.name}'s bonds`)}
+            </button>
+            <div className="hint" style={{ marginTop: 4 }}>{tt("Csak ennek a karakternek a lapját olvassa újra, a világ nem indul újra.", "Re-reads only this character's sheet; the world is not restarted.")}</div>
+          </>
+        ) : null}
         <p className="hint" style={{ marginTop: 8 }}>
           {tt(
             "Itt csak a világban ténylegesen létező játékos- és AI-karakterek dinamikus viszonyai szerepelnek. A nem aktív szülőket, testvéreket, exeket, mentorokat és más fontos embereket a karakter Szerkesztés → Kapcsolódások mezőjében írd le.",

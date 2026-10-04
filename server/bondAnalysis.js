@@ -203,8 +203,13 @@ function assertCapacity(capability, outputTokens) {
    unresponsive model: the next one is tried after four. Long sheets keep the full ten. */
 export const generationTimeoutMs = (promptChars) => (Number(promptChars) <= 40000 ? 240000 : 600000);
 
-async function callStructuredCandidate(candidate, completePrompt, schema, outputTokens, transport, mode) {
+/* How hard the model thinks: a careful relationship reading thinks as much as it can, a mechanical job (normalising an
+   answer, extracting names and quotes from a short text) does not need to, and thinking is where the minutes go. */
+const thinkingFor = (mode, thinkingLevel) => (["LOW", "MEDIUM", "HIGH"].includes(String(thinkingLevel).toUpperCase()) ? String(thinkingLevel).toUpperCase() : (mode === "schema" ? "LOW" : "HIGH"));
+
+async function callStructuredCandidate(candidate, completePrompt, schema, outputTokens, transport, mode, thinkingLevel) {
   const timeoutMs = generationTimeoutMs(completePrompt.length);
+  const level = thinkingFor(mode, thinkingLevel);
   if (candidate.name === "gemini") {
     const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
       method: "POST",
@@ -216,7 +221,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
           responseMimeType: "application/json",
           responseJsonSchema: schema,
           maxOutputTokens: outputTokens,
-          thinkingConfig: { thinkingLevel: mode === "schema" ? "LOW" : "HIGH" },
+          thinkingConfig: { thinkingLevel: level },
         },
       }),
     });
@@ -241,7 +246,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
       json_schema: { name: "sheet_analysis", strict: true, schema },
     },
     max_completion_tokens: outputTokens,
-    reasoning_effort: mode === "schema" ? "low" : "high",
+    reasoning_effort: level.toLowerCase(),
   };
 
   const data = await transport("https://api.openai.com/v1/chat/completions", {
@@ -373,7 +378,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
       const outputTokens = options.outputTokens || 64000;
       assertCapacity(capability, outputTokens);
-      raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode);
+      raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode, options.thinkingLevel);
       geminiLedgerOf(candidate)?.succeed(candidate.key, candidate.model);
 
       try {
@@ -531,7 +536,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     if (!Array.isArray(profileKeys) || profileKeys.length < ids.size) throw Object.assign(new Error("All profiles are required before group inference"), { status: 400 });
     const stored = await readRows(profileKeys);
     const profiles = profileKeys.map((key) => stored.get(key)).filter((row) => row?.result && row.version === BOND_ANALYSIS_VERSION && row.world === world && row.stage === "profile");
-    if (profiles.length !== profileKeys.length || new Set(profiles.map((row) => row.result.id)).size !== profiles.length || [...ids].some((id) => !profiles.some((row) => row.result.id === id))) throw new Error("Missing or mismatched cached profiles");
+    if (profiles.length !== profileKeys.length || new Set(profiles.map((row) => row.result.id)).size !== profiles.length || [...ids].some((id) => !profiles.some((row) => row.result.id === id))) throw Object.assign(new Error("Missing or mismatched cached profiles"), { notReady: true });
     const own = profiles.find((row) => row.result.id === owner);
     if (!own || own.hash !== hash) throw new Error("Owner sheet changed since profile analysis");
     const castIds = profiles.map((row) => row.result.id);
@@ -587,7 +592,10 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     return { ...job, request: undefined, result: { bonds }, jobKey, cacheKey: jobKey, pending: false };
   }
 
-  function launch(prepared, previous) {
+  /* Bonds that a reading the server started ahead of the browser has already written, so the browser's own (cached)
+     request can still tell how much work this run really was. Informational only; each pair is reported once. */
+  const aheadComputed = new Map();
+  function launch(prepared, previous, ahead = false) {
     const { jobKey, stage, owner, hash, prompt, schema, validate, metadata, body } = prepared;
     active.add(jobKey);
     const attempts = previous?.terminal ? 0 : Number(previous?.attempts || 0);
@@ -595,16 +603,27 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
       try {
         console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length }));
         const startedAt = clock();
-        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock, ledger });
+        // Reading the names and quotes out of a short Connections text is mechanical: it does not need the long thinking
+        // that the relationship reading itself gets (72-118 s became tens of seconds).
+        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock, ledger, thinkingLevel: stage === "profile" ? "LOW" : "HIGH" });
         console.info("[bond-analysis-done]", stage, owner, analyzed.provider + "/" + analyzed.model, "[" + analyzed.keySlot + "]", analyzed.formatterModel ? "formatted by " + analyzed.formatterModel : "", "ms=" + (clock() - startedAt));
         if (stage === "baseline") {
+          // Noted before the pairs become visible, so a request that finds them cached never misses the count.
+          if (ahead) {
+            const now = clock();
+            for (const [key, at] of aheadComputed) if (now - at > 3600000) aheadComputed.delete(key);
+            for (const bond of analyzed.result.bonds) aheadComputed.set(prepared.pairKeys[prepared.cards.findIndex((card) => card.id === bond.to)], now);
+          }
           await Promise.all(analyzed.result.bonds.map((bond) => {
             const index = prepared.cards.findIndex((card) => card.id === bond.to);
             return saveRow(prepared.pairKeys[index], { stage: "pair", world: metadata.world, version: BOND_ANALYSIS_VERSION, owner, hash, bond, provider: analyzed.provider, model: analyzed.model, keySlot: analyzed.keySlot });
           }));
           await saveRow(jobKey, { ...metadata, ...analyzed, pairKeys: prepared.pairKeys, computed: analyzed.result.bonds.length });
+
         } else {
           await saveRow(jobKey, { ...metadata, ...analyzed });
+          // A reading that was registered ahead of this profile can start right now.
+          setImmediate(() => resumePending({ deferredOnly: true }).catch(() => {}));
         }
       } catch (error) {
         // Retry later only when the providers were unavailable (rate limit, overload,
@@ -627,30 +646,58 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     );
   }
 
+  /* Sweeps: pick up readings that nobody is running. A deferred baseline is a reading the browser registered before
+     its profiles were ready (see the POST handler): it waits in the table and starts the moment they are. */
   let resuming = false;
-  async function resumePending() {
-    if (resuming) return 0;
+  let again = null;
+  async function sweepPending(deferredOnly) {
+    const rows = await pool.query(
+      "SELECT cache_key, data FROM relationship_reading_cache WHERE data->>'pending' = 'true' AND updated_at > NOW() - make_interval(secs => $1)",
+      [RESUME_WINDOW_SECONDS],
+    );
+    let started = 0;
+    for (const row of rows.rows) {
+      const job = row.data;
+      if (!job?.request || active.has(row.cache_key) || clock() < Number(job.retryAt || 0)) continue;
+      if (deferredOnly && !job.deferred) continue;
+      try {
+        let prepared;
+        try { prepared = await prepare({ worldCode: job.world }, job.request); } catch (error) {
+          if (!job.deferred) throw error;
+          // Still waiting for its profiles: leave it. Any other problem is final for this registration.
+          if (!error.notReady) await saveRow(row.cache_key, { ...job, pending: false, error: error.message });
+          continue;
+        }
+        if (job.deferred) {
+          // Its profiles are ready: it becomes an ordinary reading under its own key.
+          if (!(prepared.stage === "baseline" && !prepared.missing.length) && !active.has(prepared.jobKey)) {
+            const previous = await readRow(prepared.jobKey);
+            const cooling = (previous?.pending || previous?.terminal) && clock() < Number(previous.retryAt || 0);
+            if (!cooling && !active.has(prepared.jobKey)) { await launch(prepared, previous, true); started += 1; }
+          }
+          await saveRow(row.cache_key, { ...job, pending: false, resolvedTo: prepared.jobKey });
+          continue;
+        }
+        if (prepared.jobKey !== row.cache_key || (prepared.stage === "baseline" && !prepared.missing.length)) continue;
+        await launch(prepared, job);
+        started += 1;
+      } catch (error) {
+        console.warn("[bond-analysis-resume]", error.message);
+      }
+    }
+    return started;
+  }
+  async function resumePending({ deferredOnly = false } = {}) {
+    if (resuming) { again = { deferredOnly: (again ? again.deferredOnly : true) && deferredOnly }; return 0; }
     resuming = true;
     let started = 0;
     try {
-      const rows = await pool.query(
-        "SELECT cache_key, data FROM relationship_reading_cache WHERE data->>'pending' = 'true' AND updated_at > NOW() - make_interval(secs => $1)",
-        [RESUME_WINDOW_SECONDS],
-      );
-      for (const row of rows.rows) {
-        const job = row.data;
-        if (!job?.request || active.has(row.cache_key) || clock() < Number(job.retryAt || 0)) continue;
-        try {
-          const prepared = await prepare({ worldCode: job.world }, job.request);
-          if (prepared.jobKey !== row.cache_key || (prepared.stage === "baseline" && !prepared.missing.length)) continue;
-          await launch(prepared, job);
-          started += 1;
-        } catch (error) {
-          console.warn("[bond-analysis-resume]", error.message);
-        }
-      }
-    } catch (error) {
-      console.warn("[bond-analysis-resume]", error.message);
+      let round = { deferredOnly };
+      do {
+        again = null;
+        try { started += await sweepPending(round.deferredOnly); } catch (error) { console.warn("[bond-analysis-resume]", error.message); }
+        round = again;
+      } while (round);
     } finally { resuming = false; }
     if (started) console.info("[bond-analysis-resume] picked up", started, "pending reading(s) without the app");
     return started;
@@ -667,6 +714,8 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
       const session = await getSessionIdentity(req);
       if (!session) return res.status(401).json({ error: "Not authenticated." });
       let body = req.body || {};
+      let deferredPoll = null;
+      let deferring = false;
 
       // Polling sends only the job key, never the sheet again.
       if (typeof body.poll === "string") {
@@ -677,14 +726,38 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
           return done ? res.json(done) : res.status(404).json({ error: "Unknown analysis job" });
         }
         if (!job.request) return res.status(404).json({ error: "Unknown analysis job" });
+        if (job.deferred) deferredPoll = body.poll;
         body = job.request;
+      } else if (body.defer === true && body.stage === "baseline") {
+        // The browser registers a baseline reading before its profiles are ready, so the server can carry on by
+        // itself when the phone goes to sleep between the two stages.
+        const { defer, ...request } = body;
+        body = request;
+        deferring = true;
       }
 
-      const prepared = await prepare(session, body);
+      let prepared;
+      try {
+        prepared = await prepare(session, body);
+      } catch (error) {
+        if (error.notReady && (deferredPoll || deferring)) {
+          const key = deferredPoll || cacheKeyFor([session.worldCode, "deferred", body.owner, sheetHash(String(body.ownSheet)), JSON.stringify(body.profileKeys), JSON.stringify((body.roster || []).map((entry) => entry.id)), String(body.force || "")]);
+          if (!deferredPoll) {
+            const existing = await readRow(key);
+            if (!existing?.pending) await saveRow(key, { stage: "baseline", world: session.worldCode, version: BOND_ANALYSIS_VERSION, hash: sheetHash(String(body.ownSheet)), deferred: true, request: body, pending: true, attempts: 0 });
+          }
+          return res.status(202).json({ stage: "baseline", world: session.worldCode, version: BOND_ANALYSIS_VERSION, jobKey: key, cacheKey: key, pending: true, deferred: true, missing: (body.roster || []).length, cached: false, error: null, retryAt: null });
+        }
+        throw error;
+      }
       const { jobKey, stage, metadata } = prepared;
 
       if (stage === "baseline" && !prepared.missing.length) {
-        return res.json({ ...metadata, result: { bonds: prepared.cards.map((card) => prepared.bonds.get(card.id)) }, computed: 0, jobKey, cacheKey: jobKey, pending: false, cached: true });
+        // The job that wrote these pairs is still finishing (its own row is saved last): say so, the next poll has all of it.
+        if (active.has(jobKey)) return res.status(202).json({ ...metadata, jobKey, cacheKey: jobKey, pending: true, missing: 0, cached: false, error: null, retryAt: null });
+        // jobComputed: how many of these bonds the server read ahead of this request (reported once).
+        const jobComputed = prepared.pairKeys.filter((key) => aheadComputed.delete(key)).length;
+        return res.json({ ...metadata, result: { bonds: prepared.cards.map((card) => prepared.bonds.get(card.id)) }, computed: 0, jobComputed, jobKey, cacheKey: jobKey, pending: false, cached: true });
       }
 
       const previous = await readRow(jobKey);
@@ -699,7 +772,7 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
       if (!active.has(jobKey)) {
         const cooling = (previous?.pending || previous?.terminal) && clock() < Number(previous.retryAt || 0);
         if (cooling && previous.terminal) return res.status(422).json({ error: previous.error });
-        if (!cooling) await launch(prepared, previous);
+        if (!cooling) await launch(prepared, previous, deferring);
       }
       res.status(202).json({ ...waitingOn, error: previous?.error || null, retryAt: previous?.retryAt || null });
     } catch (error) {

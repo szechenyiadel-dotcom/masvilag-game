@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import { registerBondAnalysis, analyzeStructured } from "../server/bondAnalysis.js";
 import { EXTRACT_PROMPT, BASELINE_PROMPT } from "../src/bondAnalysis.js";
-import { fullSheetText, relationshipSourceText, rebuildBondGraph, installBondGraph, analysisReady } from "../src/bondClient.js";
+import { fullSheetText, relationshipSourceText, relationshipFields, characterIdentities, rebuildBondGraph, installBondGraph, analysisReady, bondSourceFingerprint } from "../src/bondClient.js";
 
 // The whole path: real client -> real Express handler -> in-memory cache table ->
 // scripted "model". The model returns valid output derived from the prompt, so the
@@ -60,10 +60,10 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
   let clockNow = 1_000_000;
   let inFlight = 0;
   let maxInFlight = 0;
-  const analyze = async (prompt, schema, validate) => {
+  const analyze = async (prompt, schema, validate, options = {}) => {
     const stage = prompt.startsWith(EXTRACT_PROMPT) ? "profile" : "baseline";
     const payload = JSON.parse(prompt.slice((stage === "profile" ? EXTRACT_PROMPT : BASELINE_PROMPT).length + 1));
-    calls.push({ stage, owner: payload.owner, targets: payload.roster?.map((card) => card.id) });
+    calls.push({ stage, owner: payload.owner, targets: payload.roster?.map((card) => card.id), thinking: options.thinkingLevel });
     payloads.push({ stage, payload });
     inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
     try {
@@ -112,6 +112,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     store, calls, payloads, bodies, post, api, advance: (ms) => { clockNow += ms; }, resume: handle.resumePending,
     maxInFlight: () => maxInFlight, reset: () => { calls.length = 0; bodies.length = 0; payloads.length = 0; },
     rebuild: (chars, options = {}) => rebuildBondGraph({ chars }, { subjects, api, language: "hu", pollMs: 5, ...options }),
+    rebuildWorld: (world, options = {}) => rebuildBondGraph(world, { subjects, api, language: "hu", pollMs: 5, ...options }),
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -219,9 +220,11 @@ test("A sheet is uploaded once per job; polling sends only the job key", async (
   const sim = await start({ delay: 40 });
   try {
     await sim.rebuild([person("a"), person("b")]);
-    const uploads = sim.bodies.filter((body) => body.ownSheet);
+    const uploads = sim.bodies.filter((body) => body.ownSheet && !body.defer);
+    const registrations = sim.bodies.filter((body) => body.defer);
     const polls = sim.bodies.filter((body) => body.poll);
     assert.equal(uploads.length, 4, "2 profiles + 2 baselines, each submitted once");
+    assert.equal(registrations.length, 2, "and each baseline registered once ahead, so the server can carry on without the app");
     assert.ok(polls.length >= 4);
     assert.ok(polls.every((body) => Object.keys(body).join() === "poll"));
   } finally { await sim.close(); }
@@ -583,4 +586,163 @@ test("A model that leaves out the group layer and the objective quotes no longer
     assert.deepEqual(result.baselines["a>b"].evidence, [], "a quote that is not in the sheet never stays");
     assert.ok(![...sim.store.values()].some((row) => row.error), "no failed round was recorded");
   } finally { await sim.close(); }
+});
+
+/* ---------- the server carries the two stages on by itself ---------- */
+
+const requestBodies = (chars) => {
+  const world = { chars };
+  const sheets = Object.fromEntries(chars.map((c) => [c.id, relationshipSourceText(c, undefined, world)]));
+  const fieldNames = Object.fromEntries(chars.map((c) => [c.id, Object.keys(relationshipFields(c, world))]));
+  return {
+    profile: (c) => ({ stage: "profile", owner: c.id, roster: chars.filter((o) => o.id !== c.id).map((o) => ({ id: o.id, names: [o.name] })), ownSheet: sheets[c.id], fieldNames: fieldNames[c.id], language: "hu", force: "" }),
+    baseline: (c, profileKeys, extra = {}) => ({ stage: "baseline", owner: c.id, roster: chars.filter((o) => o.id !== c.id).map((o) => ({ id: o.id, names: [], oneLine: "" })), identities: characterIdentities(chars), ownSheet: sheets[c.id], profileKeys, language: "hu", force: "", ...extra }),
+  };
+};
+
+test("A profile is read with little thinking, a relationship reading with full thinking", async () => {
+  const sim = await start();
+  try {
+    await sim.rebuild([person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")]);
+    assert.ok(sim.calls.filter((call) => call.stage === "profile").every((call) => call.thinking === "LOW"));
+    assert.ok(sim.calls.filter((call) => call.stage === "baseline").every((call) => call.thinking === "HIGH"));
+  } finally { await sim.close(); }
+});
+
+test("A baseline registered before its profiles are ready starts by itself the moment they are, with nobody polling", async () => {
+  const sim = await start({ delay: 60 });
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")];
+    const make = requestBodies(chars);
+    const profiles = await Promise.all(chars.map((c) => sim.post(make.profile(c))));
+    assert.ok(profiles.every((row) => row.status === 202), "the profiles are still being read");
+    const profileKeys = profiles.map((row) => row.body.jobKey);
+    const registered = await Promise.all(chars.map((c) => sim.post(make.baseline(c, profileKeys, { defer: true }))));
+    assert.ok(registered.every((row) => row.status === 202 && row.body.deferred === true && row.body.pending === true), "registered, waiting for the profiles");
+    assert.equal(sim.calls.filter((call) => call.stage === "baseline").length, 0, "nothing starts before the profiles are ready");
+    await until(() => [...sim.store.values()].filter((row) => row.stage === "baseline" && row.result).length === 2, "both baselines to be read without any poll");
+    const order = sim.calls.map((call) => call.stage);
+    assert.deepEqual(order, ["profile", "profile", "baseline", "baseline"], "profiles first, then the baselines, all on the server's own initiative");
+    const done = await sim.post({ poll: registered[0].body.jobKey });
+    assert.equal(done.status, 200, "the browser can collect it later with the key it was given");
+    assert.equal(done.body.result.bonds.length, 1);
+  } finally { await sim.close(); }
+});
+
+test("Registering the same baseline twice leaves one waiting row, and a baseline whose profiles never finish does not start", async () => {
+  const sim = await start({ hang: true });
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")];
+    const make = requestBodies(chars);
+    const profiles = await Promise.all(chars.map((c) => sim.post(make.profile(c))));
+    const profileKeys = profiles.map((row) => row.body.jobKey);
+    const first = await sim.post(make.baseline(chars[0], profileKeys, { defer: true }));
+    const second = await sim.post(make.baseline(chars[0], profileKeys, { defer: true }));
+    assert.equal(first.body.jobKey, second.body.jobKey, "the same registration has the same key");
+    assert.equal([...sim.store.values()].filter((row) => row.deferred).length, 1);
+    assert.equal(await sim.resume(), 0, "its profiles are not ready: nothing to start");
+    assert.equal(sim.calls.filter((call) => call.stage === "baseline").length, 0);
+    const poll = await sim.post({ poll: first.body.jobKey });
+    assert.equal(poll.status, 202, "asking about it meanwhile just says it is waiting");
+    assert.equal(poll.body.deferred, true);
+  } finally { await sim.close(); }
+});
+
+test("A baseline registered when the profiles are already ready is simply started, as before", async () => {
+  const sim = await start();
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")];
+    const make = requestBodies(chars);
+    const profileKeys = [];
+    for (const c of chars) {
+      const first = await sim.post(make.profile(c));
+      profileKeys.push(first.body.jobKey);
+    }
+    await until(() => [...sim.store.values()].filter((row) => row.stage === "profile" && row.result).length === 2, "profiles to be read");
+    const registered = await sim.post(make.baseline(chars[0], profileKeys, { defer: true }));
+    assert.equal(registered.status, 202);
+    assert.ok(!registered.body.deferred, "no waiting row: it is an ordinary reading now");
+    await until(() => [...sim.store.values()].some((row) => row.stage === "baseline" && row.result), "the baseline to be read");
+  } finally { await sim.close(); }
+});
+
+/* ---------- one character can be read again without touching the rest ---------- */
+
+test("Re-reading one character reads only their sheet and the bonds they write; the rest comes back from the cache", async () => {
+  const sim = await start();
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag."), person("c"), person("d")];
+    const world = { chars };
+    installBondGraph(world, await sim.rebuildWorld(world), subjects);
+    sim.reset();
+    const again = await sim.rebuildWorld(world, { only: "c" });
+    assert.deepEqual(owners(sim.calls, "profile"), ["c"], "only c's sheet is read again");
+    assert.deepEqual(sim.calls.filter((call) => call.stage === "baseline").map((call) => [call.owner, call.targets]), [["c", ["a", "b", "d"]]], "and only the bonds c writes");
+    assert.deepEqual(Object.keys(again.analysis.generations), ["c"], "the fresh read is remembered for c alone");
+    assert.equal(Object.keys(again.baselines).length, 12, "the graph is still complete");
+  } finally { await sim.close(); }
+});
+
+test("A re-read is not undone by the next rebuild: later runs keep using the character's token", async () => {
+  const sim = await start();
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag."), person("c")];
+    const world = { chars };
+    installBondGraph(world, await sim.rebuildWorld(world), subjects);
+    installBondGraph(world, await sim.rebuildWorld(world, { only: "c" }), subjects);
+    const token = world.bondAnalysis.generations.c;
+    assert.ok(token);
+    sim.reset();
+    const next = [...chars, person("d")];
+    await sim.rebuildWorld({ ...world, chars: next });
+    const forceOf = (owner) => [...new Set(sim.bodies.filter((body) => body.owner === owner && !body.poll).map((body) => body.force))];
+    assert.deepEqual(forceOf("c"), [token], "c is still read under the token of its fresh reading");
+    assert.deepEqual(forceOf("a"), [""], "the others stay on the ordinary cache");
+  } finally { await sim.close(); }
+});
+
+test("Everything read again at once gives every character the same fresh token", async () => {
+  const sim = await start();
+  try {
+    const chars = [person("a"), person("b")];
+    const result = await sim.rebuild(chars, { force: true });
+    const tokens = Object.values(result.analysis.generations);
+    assert.equal(tokens.length, 2);
+    assert.equal(new Set(tokens).size, 1);
+  } finally { await sim.close(); }
+});
+
+test("Baselines are registered ahead only when some profile is really being read, never when everything is cached", async () => {
+  const sim = await start();
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")];
+    await sim.rebuild(chars);
+    assert.equal(sim.bodies.filter((body) => body.defer).length, 2, "cold start: registered ahead");
+    sim.reset();
+    await sim.rebuild(chars);
+    assert.equal(sim.bodies.filter((body) => body.defer).length, 0, "everything cached: nothing to register");
+  } finally { await sim.close(); }
+});
+
+test("A character read again on purpose gets the fresh bonds; the others keep what play made of them", () => {
+  const baseline = (from, to, extra = {}) => ({ from, to, type: "semleges", levels: { sentiment: 0, trust: 0, attraction: 0, tension: 0 }, ...extra });
+  const world = {
+    chars: [person("a"), person("b"), person("c")],
+    relationshipBaselines: { "a>b": baseline("a", "b"), "b>a": baseline("b", "a"), "a>c": baseline("a", "c"), "c>a": baseline("c", "a"), "b>c": baseline("b", "c"), "c>b": baseline("c", "b") },
+    rels: {}, relationshipHistory: { "c>a": [{ note: "old" }], "a>c": [{ note: "old" }], "a>b": [{ note: "keep" }] }, officialRelationships: { "c>b": { kind: "x" } },
+  };
+  for (const key of Object.keys(world.relationshipBaselines)) world.rels[key] = { ...world.relationshipBaselines[key], levels: { sentiment: 40, trust: 40, attraction: 0, tension: 0 }, evolved: true };
+  const result = { baselines: { ...world.relationshipBaselines, "c>a": baseline("c", "a", { type: "új típus" }), "a>c": baseline("a", "c", { type: "új típus" }) }, analysis: { version: 1, source: bondSourceFingerprint(world, subjects), profiles: {}, generations: { c: "t" } } };
+  installBondGraph(world, result, subjects, { reset: ["c"] });
+  assert.equal(world.rels["c>a"].type, "új típus", "c's outgoing bond is the fresh reading");
+  assert.equal(world.rels["c>a"].evolved, undefined, "play's changes are gone for it");
+  assert.equal(world.rels["a>c"].type, "új típus", "a bond toward c whose reading changed is refreshed too");
+  assert.equal(world.rels["c>b"].evolved, undefined, "all of c's outgoing bonds are reset");
+  assert.equal(world.rels["b>c"].evolved, true, "a bond toward c that did not change keeps what play made of it");
+  assert.equal(world.rels["a>b"].evolved, true, "bonds between others are untouched");
+  assert.equal(world.relationshipHistory["c>a"], undefined);
+  assert.equal(world.relationshipHistory["a>c"], undefined);
+  assert.deepEqual(world.relationshipHistory["a>b"], [{ note: "keep" }]);
+  assert.equal(world.officialRelationships["c>b"], undefined);
+  assert.deepEqual(world.bondAnalysis.generations, { c: "t" });
 });
