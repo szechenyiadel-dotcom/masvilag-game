@@ -426,7 +426,7 @@ test("A mixed failure is classed by what the providers that were asked said; rep
 });
 
 test("With no provider configured the failure says what to set instead of an empty message", async () => {
-  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No free analysis provider is configured.*AI_ALLOW_PAID_BACKGROUND=1/);
+  await assert.rejects(analyzeStructured("x", { type: "object" }, () => {}, { env: {} }), /No analysis provider is configured.*OPENAI_API_KEY.*AI_ALLOW_PAID_BACKGROUND=1/);
 });
 
 test("One analysis stops trying further providers after its deadline", async () => {

@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { createRequire } from "node:module";
 import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
-import { sheetHash, analyzeStructured, generationTimeoutMs } from "../server/bondAnalysis.js";
+import { sheetHash, analyzeStructured, generationTimeoutMs, providerCandidates } from "../server/bondAnalysis.js";
 import { createGeminiLedger } from "../server/aiPolicy.js";
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
@@ -147,7 +147,7 @@ test("Incomplete baseline cannot partially reset even in memory", () => {
  delete world.relationshipBaselines["ai-b>sensei"];
  const before = structuredClone(world); assert.throws(() => restoreBaselineGraph(world, ids)); assert.deepEqual(world, before);
 });
-const candidates = [{ name: "gemini", model: "configured-primary", key: "test", priority: 100 }, { name: "groq", model: "configured-fallback", key: "test", contextWindow: 1000000, outputLimit: 65536 }];
+const candidates = [{ name: "gemini", model: "configured-primary", key: "test", priority: 100 }, { name: "openai", model: "configured-fallback", key: "test" }];
 const response = result => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] });
 const transportFor = (mode, calls) => async (url, opts) => {
  calls.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
@@ -157,13 +157,12 @@ const transportFor = (mode, calls) => async (url, opts) => {
   return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{}" }] } }] };
  }
  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: mode === "size" ? 200 : 1000000, outputTokenLimit: 65536 };
- if (url.endsWith("/models")) return { data: [{ id: "configured-fallback", active: true, context_window: 1000000, max_completion_tokens: 65536 }] };
  return response({ ok: true });
 };
 for (const mode of ["rate", "invalid", "size"]) test("Provider fallback: " + mode + ", full prompt unchanged", async () => {
  const calls = [], prompt = "TELJES LAP ".repeat(3000) + "VÉGE";
  const result = await analyzeStructured(prompt, { type: "object" }, value => { if (!value.ok) throw new Error("invalid output"); }, { candidates, transport: transportFor(mode, calls), outputTokens: 1000 });
- assert.equal(result.provider, "groq");
+ assert.equal(result.provider, "openai");
  const sent = calls.find(c => c.url.endsWith("/chat/completions")); assert.equal(sent.body.messages[0].content, prompt);
  assert.equal(calls.filter(c => c.url.endsWith(":generateContent")).length, mode === "invalid" || mode === "rate" ? 1 : 0);
 });
@@ -272,7 +271,7 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.equal(result.provider, "gemini");
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
-test("Restart profile rotation keeps every free Gemini fallback and never reaches paid Gemini or OpenAI", async () => {
+test("Restart profile rotation keeps every free Gemini fallback, then asks OpenAI once, and never the paid Gemini key", async () => {
  const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
  const attempted = [];
@@ -288,13 +287,14 @@ test("Restart profile rotation keeps every free Gemini fallback and never reache
   attempted.push(opts.headers.Authorization);
   return response({ ok: true });
  };
- await assert.rejects(analyzeStructured(
+ const result = await analyzeStructured(
   "Complete source",
   { type: "object" },
   value => assert.equal(value.ok, true),
   { env, transport, outputTokens: 1000, semanticStartOffset: 3 }
- ), /No analysis provider completed/);
- assert.deepEqual(attempted, ["test-key-5","test-key-6","test-key-7","test-key-8","test-key-2","test-key-3","test-key-4"]);
+ );
+ assert.deepEqual(attempted, ["test-key-5","test-key-6","test-key-7","test-key-8","test-key-2","test-key-3","test-key-4","Bearer openai-key"]);
+ assert.equal(result.provider, "openai"); assert.equal(result.model, "configured-openai");
 });
 test("Paid Gemini key 1 is never used for analysis unless paid background use is switched on", async () => {
  const run = async (extraEnv) => {
@@ -320,7 +320,7 @@ test("Paid Gemini key 1 is never used for analysis unless paid background use is
  assert.deepEqual(paid.attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8","test-key-1"]);
  assert.equal(paid.result.keySlot, "GEMINI_API_KEY");
 });
-test("Semantic OpenAI fallback exists only with paid background use switched on, after every Gemini key", async () => {
+test("OpenAI is the paid last resort of a sheet reading: after every free Gemini key, never the paid Gemini key, and it can be switched off", async () => {
  const run = async (extraEnv) => {
   const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai", ...extraEnv };
   const attempted = [];
@@ -333,27 +333,43 @@ test("Semantic OpenAI fallback exists only with paid background use switched on,
   const outcome = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 }).then(result => ({ result }), error => ({ error }));
   return { attempted, ...outcome };
  };
- const free = await run({});
- assert.deepEqual(free.attempted, ["g2"]);
- assert.ok(free.error);
- const paid = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
- assert.deepEqual(paid.attempted, ["g2", "g1", "Bearer oa"]);
- assert.equal(paid.result.provider, "openai");
+ const normal = await run({});
+ assert.deepEqual(normal.attempted, ["g2", "Bearer oa"], "free key first, OpenAI next, paid Gemini key 1 never");
+ assert.equal(normal.result.provider, "openai"); assert.equal(normal.result.keySlot, "OPENAI_API_KEY");
+ const off = await run({ BOND_ANALYSIS_OPENAI: "off" });
+ assert.deepEqual(off.attempted, ["g2"]); assert.ok(off.error);
+ const noKey = await run({ OPENAI_API_KEY: "" });
+ assert.deepEqual(noKey.attempted, ["g2"]); assert.ok(noKey.error);
+ const everything = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
+ assert.deepEqual(everything.attempted, ["g2", "g1", "Bearer oa"], "the paid Gemini key is still opt-in, and stays before OpenAI");
 });
-test("Invalid Gemini JSON can be normalized by Groq without changing semantic provider attribution", async () => {
+test("OpenAI is asked with the whole prompt and a paid call is logged without the key", async () => {
+ const prompt = "entire sheet ".repeat(5500) + "FINAL SOURCE";
+ const seen = [], logged = [];
+ const transport = async (url, options) => { seen.push({ url, body: JSON.parse(options.body) }); return response({ ok: true }); };
+ const original = console.info; console.info = (...args) => logged.push(args.join(" "));
+ try {
+  const result = await analyzeStructured(prompt, { type: "object" }, value => assert.equal(value.ok, true), { candidates: [candidates[1]], transport, outputTokens: 1000 });
+  assert.equal(result.provider, "openai");
+ } finally { console.info = original; }
+ assert.equal(seen[0].url, "https://api.openai.com/v1/chat/completions");
+ assert.equal(seen[0].body.messages[0].content, prompt, "never shortened");
+ assert.ok(logged.some(line => /\[bond-analysis-paid\] openai configured-fallback mode=semantic promptChars=\d+/.test(line)), logged.join(" | "));
+ assert.ok(!logged.join(" ").includes("test"), "the key is not logged");
+});
+test("Invalid Gemini JSON can be normalized by OpenAI without changing semantic provider attribution", async () => {
  const semantic = { name: "gemini", model: "semantic-gemini", key: "g", keySlot: "GEMINI_API_KEY_2" };
- const schemaRepair = { name: "groq", model: "schema-groq", key: "r", keySlot: "GROQ_API_KEY", contextWindow: 1000000, outputLimit: 65536 };
+ const schemaRepair = { name: "openai", model: "schema-openai", key: "r", keySlot: "OPENAI_API_KEY" };
  const calls = [];
  const transport = async (url, opts) => {
   if (url.endsWith(":countTokens")) return { totalTokens: 100 };
   if (url.endsWith(":generateContent")) { calls.push("gemini"); return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] }; }
   if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
-  if (url.endsWith("/models")) return { data: [{ id: "schema-groq", active: true, context_window: 1000000, max_completion_tokens: 65536 }] };
-  calls.push("groq"); return response({ ok: true });
+  calls.push("openai"); return response({ ok: true });
  };
  const result = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: [schemaRepair], transport, outputTokens: 1000 });
- assert.deepEqual(calls, ["gemini", "groq"]);
- assert.equal(result.provider, "gemini"); assert.equal(result.formatterProvider, "groq");
+ assert.deepEqual(calls, ["gemini", "openai"]);
+ assert.equal(result.provider, "gemini"); assert.equal(result.formatterProvider, "openai");
 });
 
 test("Sensei and shared affiliation behavior use validated profiles/current layers, not sheet keywords", () => {
@@ -378,27 +394,26 @@ test("Provider-side invalid JSON receives two attempts before failover", async (
   return transportFor("rate", calls)(url, opts);
  };
  const result = await analyzeStructured("Complete original sheet", { type: "object" }, result => assert.equal(result.ok, true), { candidates, transport, outputTokens: 1000 });
- assert.equal(invalid, 1); assert.equal(result.provider, "groq");
+ assert.equal(invalid, 1); assert.equal(result.provider, "openai");
 });
-test("Schema routing uses Groq key 1, then key 2, and OpenAI only with paid background use switched on", async () => {
+test("Schema routing asks the light Gemini models on the free keys first and OpenAI last, never Groq", async () => {
  const run = async (extraEnv) => {
   const tried = [];
-  const env = { GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2", GROQ_ANALYSIS_CONTEXT_WINDOW: "131072", GROQ_ANALYSIS_OUTPUT_LIMIT: "65536", OPENAI_API_KEY: "openai-key", OPENAI_SCHEMA_MODEL: "configured-openai", ...extraEnv };
+  const env = { GEMINI_API_KEY_2: "g2", GEMINI_LITE_MODELS: "lite-x", GEMINI_EXTRA_MODELS: "off", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2", GROQ_MODEL: "groq-m", OPENAI_API_KEY: "openai-key", OPENAI_SCHEMA_MODEL: "configured-openai", ...extraEnv };
   const transport = async (url, opts) => {
-   if (url.endsWith("/models")) return { data: [{ id: "configured-groq", active: true, context_window: 131072, max_completion_tokens: 65536 }] };
-   const auth = opts.headers.Authorization; tried.push(auth);
-   if (auth === "Bearer groq-1" || auth === "Bearer groq-2") { const error = new Error("quota"); error.status = 429; throw error; }
-   return response({ ok: true });
+   if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+   if (url.endsWith(":generateContent")) { tried.push("gemini:" + decodeURIComponent(url.split("/models/")[1].split(":")[0])); const error = new Error("quota"); error.status = 429; throw error; }
+   if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+   tried.push(opts.headers.Authorization); return response({ ok: true });
   };
   const outcome = await analyzeStructured("Complete sheet", { type: "object" }, result => assert.equal(result.ok, true), { env, transport, outputTokens: 1000, mode: "schema" }).then(result => ({ result }), error => ({ error }));
   return { tried, ...outcome };
  };
- const free = await run({});
- assert.deepEqual(free.tried, ["Bearer groq-1", "Bearer groq-2"]);
- assert.ok(free.error);
- const paid = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
- assert.deepEqual(paid.tried, ["Bearer groq-1", "Bearer groq-2", "Bearer openai-key"]);
- assert.equal(paid.result.provider, "openai"); assert.equal(paid.result.keySlot, "OPENAI_API_KEY");
+ const normal = await run({});
+ assert.deepEqual(normal.tried, ["gemini:lite-x", "Bearer openai-key"]);
+ assert.equal(normal.result.provider, "openai"); assert.equal(normal.result.keySlot, "OPENAI_API_KEY"); assert.equal(normal.result.model, "configured-openai");
+ const off = await run({ BOND_ANALYSIS_OPENAI: "off" });
+ assert.deepEqual(off.tried, ["gemini:lite-x"]); assert.ok(off.error);
 });
 test("Neutral complete-graph records do not imply acquaintance or social interest", () => {
  const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8"), ast = parse(source, { sourceType: "module", plugins: ["jsx"] });
@@ -439,7 +454,7 @@ test("Invalid semantic output moves to the next semantic candidate when no schem
  const transport = async (url, opts) => {
   if (url.endsWith(":countTokens")) return {totalTokens:100};
   if (url.endsWith(":generateContent")) { const model=url.includes("/primary:")?"primary":"alternate";calls.push(model);return {candidates:[{finishReason:"STOP",content:{parts:[{text:model==="alternate"?'{"ok":true}':'{}'}]}}]}; }
-  if (url.endsWith("/chat/completions")) {calls.push("groq");return response({});}
+  if (url.endsWith("/chat/completions")) {calls.push("openai");return response({});}
   if (url.endsWith("/models")) return {data:[{id:"configured-fallback",active:true,context_window:1000000,max_completion_tokens:65536}]};
   return {supportedGenerationMethods:["generateContent"],inputTokenLimit:1000000,outputTokenLimit:65536};
  };
@@ -541,13 +556,13 @@ test("Quote check ignores layout only: spacing, typographic quotes and dashes, n
  assert.throws(() => quoted(42));
 });
 
-test("All 20 sheets complete when Gemini quota runs out after 16 and OpenAI is unavailable", async () => {
+test("All 20 sheets complete when Gemini quota runs out after 16: OpenAI reads the rest, each with the whole sheet", async () => {
  const env = {
   GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "free", GEMINI_API_KEY: "paid",
   OPENAI_API_KEY: "openai", OPENAI_ANALYSIS_MODEL: "configured-openai",
   GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2",
  };
- const completed = [], fallbackPrompts = [];
+ const completed = [], fallbackPrompts = [], hosts = new Set();
  let prompt;
  const transport = async (url, options) => {
   if (url.endsWith(":countTokens")) return { totalTokens: 12000 };
@@ -556,9 +571,7 @@ test("All 20 sheets complete when Gemini quota runs out after 16 and OpenAI is u
    return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({ sheet: prompt }) }] } }] };
   }
   if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
-  if (url.endsWith("/models")) return { data: [{ id: "configured-groq", active: true, context_window: 131072, max_completion_tokens: 65536 }] };
-  if (url.includes("api.openai.com")) throw Object.assign(new Error("invalid json response body"), { transient: true });
-  if (options.headers.Authorization === "Bearer groq-1") throw Object.assign(new Error("rate limit"), { status: 429 });
+  hosts.add(new URL(url).host);
   const body = JSON.parse(options.body);
   fallbackPrompts.push(body.messages[0].content);
   return response({ sheet: body.messages[0].content });
@@ -569,49 +582,20 @@ test("All 20 sheets complete when Gemini quota runs out after 16 and OpenAI is u
   completed.push(result);
  }
  assert.equal(completed.length, 20);
- assert.deepEqual(completed.slice(16).map(row => row.keySlot), Array(4).fill("GROQ_API_KEY_2"));
+ assert.deepEqual(completed.slice(16).map(row => row.keySlot), Array(4).fill("OPENAI_API_KEY"));
  assert.equal(fallbackPrompts.length, 4);
  assert.ok(fallbackPrompts.every(value => value.endsWith("END") && value.length > 39000));
+ assert.deepEqual([...hosts], ["api.openai.com"], "Groq is never asked");
 });
 
-test("Groq reserves answer capacity for a long full sheet instead of requiring 64k", async () => {
- const prompt = "entire sheet ".repeat(5500) + "FINAL SOURCE";
- const calls = [];
- const transport = async (url, options) => {
-  if (url.endsWith("/models")) return { data: [{ id: "configured-fallback", active: true, context_window: 131072, max_completion_tokens: 32768 }] };
-  calls.push(JSON.parse(options.body));
-  return response({ ok: true });
- };
- const result = await analyzeStructured(prompt, { type: "object" }, value => assert.equal(value.ok, true), { candidates: [candidates[1]], transport });
- assert.equal(result.provider, "groq");
- assert.equal(calls[0].messages[0].content, prompt);
- assert.ok(calls[0].max_completion_tokens > 1024);
- assert.ok(calls[0].max_completion_tokens <= 32768);
- assert.ok(calls[0].max_completion_tokens + Math.ceil(Buffer.byteLength(prompt + JSON.stringify({ type: "object" }), "utf8") * 1.3) <= 131072);
+test("An incomplete OpenAI answer is never accepted", async () => {
+ const transport = async () => ({ choices: [{ finish_reason: "length", message: { content: '{"ok":true}' } }] });
+ await assert.rejects(analyzeStructured("full sheet ".repeat(6000), { type: "object" }, () => {}, { candidates: [candidates[1]], transport }), /Incomplete OpenAI analysis: length/);
 });
 
-test("Groq capacity adjustment never accepts a truncated answer", async () => {
- const transport = async (url) => url.endsWith("/models")
-  ? { data: [{ id: "configured-fallback", active: true, context_window: 131072, max_completion_tokens: 32768 }] }
-  : { choices: [{ finish_reason: "length", message: { content: '{"ok":true}' } }] };
- await assert.rejects(analyzeStructured("full sheet ".repeat(6000), { type: "object" }, () => {}, { candidates: [candidates[1]], transport }), /Incomplete Groq analysis: length/);
-});
-
-test("Groq can repair exact quotations in long outputs without dropping the source", async () => {
- const prompt = "complete source ".repeat(4500) + "FINAL SOURCE";
- const calls = [];
- const transport = async (url, options) => {
-  if (url.endsWith(":countTokens")) return { totalTokens: 20000 };
-  if (url.endsWith(":generateContent")) return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] };
-  if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
-  if (url.endsWith("/models")) return { data: [{ id: "configured-fallback", active: true, context_window: 131072, max_completion_tokens: 32768 }] };
-  calls.push(JSON.parse(options.body));
-  return response({ ok: true });
- };
- const result = await analyzeStructured(prompt, { type: "object" }, value => assert.equal(value.ok, true), { candidates: [candidates[0]], schemaCandidates: [candidates[1]], transport });
- assert.equal(result.formatterProvider, "groq");
- assert.ok(calls[0].messages[0].content.includes(prompt));
- assert.ok(calls[0].max_completion_tokens <= 32768);
+test("A sheet reading never reaches Groq, whatever Groq keys exist", () => {
+ const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
+ for (const mode of ["semantic", "schema"]) assert.ok(providerCandidates(config, mode).every(candidate => candidate.name === "gemini" || candidate.name === "openai"), mode);
 });
 
 /* ---------- sheet analysis shares the server's view of resting Gemini keys ---------- */
@@ -726,11 +710,11 @@ test("The result says which model of the ladder finally read the sheet", async (
 
 test("With no Gemini model configured there is still nothing to try, however many keys exist", async () => {
   const out = await ladderRun({ env: { GEMINI_ANALYSIS_MODEL: "", GEMINI_MODEL: "" }, answer: () => ok });
-  assert.match(out.error.message, /No free analysis provider is configured/);
+  assert.match(out.error.message, /No analysis provider is configured/);
   assert.deepEqual(out.attempted, []);
 });
 
-test("Normalising a malformed answer uses the light Gemini models first, with a low thinking level; Groq is not needed", async () => {
+test("Normalising a malformed answer uses the light Gemini models first, with a low thinking level", async () => {
   const out = await ladderRun({
     env: { GROQ_API_KEY: "gk", GROQ_MODEL: "groq-m" },
     validate: (value) => assert.equal(value.ok, true),
@@ -743,7 +727,7 @@ test("Normalising a malformed answer uses the light Gemini models first, with a 
   assert.equal(out.bodies[1].body.generationConfig.thinkingConfig.thinkingLevel, "LOW");
 });
 
-test("A repair that Groq's free tier could never take (413) no longer ends the job: a light Gemini model does it", async () => {
+test("With Groq keys configured a repair is still done by a light Gemini model", async () => {
   const out = await ladderRun({
     env: { GROQ_API_KEY: "gk", GROQ_MODEL: "groq-m" },
     answer: ({ model }) => ({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: model === "pro-x" ? "{}" : '{"ok":true}' }] } }] }),
