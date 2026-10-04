@@ -600,7 +600,7 @@ test("The model that actually answered is the one reported, not always the first
 
 /* ---------- the paid providers: a ceiling on what they are sent, and a meter on what they use ---------- */
 
-const paidUrl = { openrouter3: "https://openrouter.ai/api/v1/chat/completions", mistral: "https://api.mistral.ai/v1/chat/completions", mistral2: "https://api.mistral.ai/v1/chat/completions" };
+const paidUrl = { "openrouter-dm-dolphin": "https://openrouter.ai/api/v1/chat/completions", "openrouter-dm-venice": "https://openrouter.ai/api/v1/chat/completions", mistral: "https://api.mistral.ai/v1/chat/completions", mistral2: "https://api.mistral.ai/v1/chat/completions" };
 const callPaid = (context, provider, body) => context.proxyCompatibleMessage(provider, "key", "m", paidUrl[provider], body);
 const bigBody = (extra = {}) => ({
   source: "dm",
@@ -611,8 +611,8 @@ const bigBody = (extra = {}) => ({
 });
 const sentChars = (payload) => payload.messages.reduce((n, m) => n + m.content.length, 0);
 
-test("DeepSeek and Mistral are sent at most the ceiling, whatever the prompt grew to, and the protected tail survives", async () => {
-  for (const provider of ["openrouter3", "mistral", "mistral2"]) {
+test("The 33K DM OpenRouter routes and Mistral are capped, and the protected tail survives", async () => {
+  for (const provider of ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]) {
     const { context, sent } = groqPath({ env: {} });
     const body = { ...bigBody(), source: "comments", system: "S".repeat(40000), messages: [{ role: "user", content: "W".repeat(80000) + "\n[[PROTECTED_TAIL]]\nThe player just wrote: hello" }] };
     await callPaid(context, provider, body);
@@ -633,24 +633,24 @@ test("A prompt under the ceiling goes out exactly as it is", async () => {
 test("PAID_MAX_INPUT_CHARS moves the ceiling, and 0 switches it off", async () => {
   const body = { source: "comments", system: "S".repeat(10000), messages: [{ role: "user", content: "W".repeat(30000) }], max_tokens: 300 };
   const lowered = groqPath({ env: { PAID_MAX_INPUT_CHARS: "20000" } });
-  await callPaid(lowered.context, "openrouter3", body);
+  await callPaid(lowered.context, "openrouter-dm-dolphin", body);
   assert.ok(sentChars(lowered.sent[0]) <= 20200, "sent " + sentChars(lowered.sent[0]));
   const off = groqPath({ env: { PAID_MAX_INPUT_CHARS: "0" } });
-  await callPaid(off.context, "openrouter3", { ...body, messages: [{ role: "user", content: "W".repeat(150000) }] });
+  await callPaid(off.context, "openrouter-dm-dolphin", { ...body, messages: [{ role: "user", content: "W".repeat(150000) }] });
   assert.equal(sentChars(off.sent[0]), 10000 + 150000, "no ceiling, nothing cut");
 });
 
-test("The paid ceiling does not touch the free providers (Groq has its own budget, other providers none)", async () => {
+test("The DM ceiling does not truncate Nemotron's 1M-context Gemini fallback", async () => {
   const other = groqPath({ env: {} });
-  await other.context.proxyCompatibleMessage("openrouter", "key", "m", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
-  assert.equal(sentChars(other.sent[0]), 40000 + bigBody().messages[0].content.length, "the free OpenRouter route is left alone");
+  await other.context.proxyCompatibleMessage("openrouter3", "key", "nvidia/nemotron-3-ultra-550b-a55b:free", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
+  assert.equal(sentChars(other.sent[0]), 40000 + bigBody().messages[0].content.length, "Nemotron keeps the full prompt");
 });
 
 test("What a paid provider reports using is metered: prompt, answer, cached and reasoning tokens, per provider and per kind of request", async () => {
   const usage = { prompt_tokens: 12000, completion_tokens: 350, prompt_tokens_details: { cached_tokens: 9000 }, completion_tokens_details: { reasoning_tokens: 120 }, cost: 0.0012 };
   const reply = () => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: "hello" } }], usage }) });
   const { context, usage: meter } = groqPath({ env: {}, respond: reply });
-  await callPaid(context, "openrouter3", { source: "dm", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
+  await callPaid(context, "openrouter-dm-dolphin", { source: "dm", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
   await callPaid(context, "mistral", { source: "scene", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
   await callPaid(context, "mistral", { source: "scene", system: "s", messages: [{ role: "user", content: "hi" }], max_tokens: 300 });
   const snapshot = meter.snapshot();
@@ -661,7 +661,7 @@ test("What a paid provider reports using is metered: prompt, answer, cached and 
   assert.equal(snapshot.reasoningTokens, 360);
   assert.equal(snapshot.byProvider.mistral.calls, 2);
   assert.equal(snapshot.bySource.scene.promptTokens, 24000);
-  assert.equal(snapshot.byProviderSource["openrouter3/dm"].calls, 1);
+  assert.equal(snapshot.byProviderSource["openrouter-dm-dolphin/dm"].calls, 1);
   assert.ok(Math.abs(snapshot.cost - 0.0036) < 1e-9);
 });
 
