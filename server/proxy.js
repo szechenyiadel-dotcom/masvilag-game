@@ -5428,7 +5428,12 @@ function compactGroupChatSystem(text, max = AI_GROUP_CHAT_SYSTEM_CAP) {
 }
 
 function prepareAIRequestBody(body, priority, source) {
-  if ((body.messages || []).some(item => extractText(item.content || "").includes("[[FULL_BOND_CONTEXT]]"))) return body;
+  /* A prompt that carries the bond context of the people it is about keeps its whole text only for a DM and a group chat
+     (the client budgets those itself). Every other kind of call is shortened like any other request, around the bond
+     context, the voice cards and the newest beat, which preservePromptEdges never cuts: without a cap here a comment or a
+     post went out at 150-390k characters and the free models answered it with timeouts. */
+  const bonded = (body.messages || []).some(item => extractText(item.content || "").includes("[[FULL_BOND_CONTEXT]]"));
+  if (bonded && (source === "dm" || source === "group-chat")) return body;
   let system = String(body?.system || "");
   /* CLAUDE FIX R2: player-facing work (scene, DM reply, reactions to the player's post) gets room. */
   /* R4: the protected tail keeps what matters, so a moderate cap is enough.
@@ -5443,7 +5448,9 @@ function prepareAIRequestBody(body, priority, source) {
     ? AI_GROUP_CHAT_SYSTEM_CAP
     : source === "dm"
       ? 12000
-      : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
+      : bonded
+        ? (liveScene || source === "scene" ? 80000 : (priority >= 50 ? 30000 : 22000))
+        : (liveScene ? 36000 : (deep ? 20000 : (priority >= 50 ? 22000 : 16000)));
   /* R70: one-time deep Gemini sheet reads must receive the complete raw sheet.
      This exemption applies ONLY to sheet-summary / character-bible. */
   const promptCap = fullSheetRead
@@ -5452,7 +5459,9 @@ function prepareAIRequestBody(body, priority, source) {
       ? AI_GROUP_CHAT_PROMPT_CAP
       : source === "dm"
         ? 18000
-        : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000)));
+        : bonded
+          ? (liveScene || source === "scene" ? 100000 : (priority >= 50 ? 70000 : 45000))
+          : (liveScene ? 84000 : (deep ? 70000 : (priority >= 50 ? 40000 : 26000)));
 
   if (source === "group-chat") {
     const before = system.length;
