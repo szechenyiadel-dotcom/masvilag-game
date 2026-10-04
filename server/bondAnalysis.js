@@ -40,9 +40,12 @@ function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-// Sheet analysis is background work: it uses free keys only and, when they are used up,
-// the job waits and retries later. Paid capacity (GEMINI_API_KEY, OpenAI) is opt-in.
+// Sheet analysis is background work: it uses the free Gemini keys first. OpenAI is its one paid last resort (the
+// owner chose it for this job): it is asked only after every free candidate has failed, and BOND_ANALYSIS_OPENAI=off
+// switches it off. The paid Gemini key stays opt-in (AI_ALLOW_PAID_BACKGROUND=1). Groq is not used here: its free
+// tier cannot carry a whole sheet, and its answers failed the verbatim-quote check.
 const allowPaid = (env) => String(env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
+const openaiFallback = (env) => Boolean(env.OPENAI_API_KEY) && !/^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_OPENAI || "").trim());
 
 const FREE_GEMINI_SLOTS = ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8"];
 
@@ -82,36 +85,15 @@ function geminiCandidates(env, models, semanticStartOffset = 0) {
   return candidates;
 }
 
-function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
+export function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
   const candidates = [];
 
   if (mode === "schema") {
-    /* Normalising an answer is light work: the light Gemini models on the free keys first (Groq's free
-       tier is too small for the original answer plus the source, a 413), Groq after them. */
+    /* Normalising an answer is light work: the light Gemini models on the free keys first, OpenAI last. */
     const config = geminiModelConfig(env);
     candidates.push(...geminiCandidates(env, uniqueValues([...config.lite, ...config.extra]), semanticStartOffset));
 
-    const models = uniqueValues([env.GROQ_ANALYSIS_MODEL, env.GROQ_MODEL]);
-    const keySlots = ["GROQ_API_KEY", "GROQ_API_KEY_2"];
-    const seenKeys = new Set();
-
-    for (const keySlot of keySlots) {
-      const key = env[keySlot];
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      for (const model of models) {
-        candidates.push({
-          name: "groq",
-          model,
-          key,
-          keySlot,
-          contextWindow: Number(env.GROQ_ANALYSIS_CONTEXT_WINDOW),
-          outputLimit: Number(env.GROQ_ANALYSIS_OUTPUT_LIMIT),
-        });
-      }
-    }
-
-    if (env.OPENAI_API_KEY && allowPaid(env)) {
+    if (openaiFallback(env)) {
       candidates.push({
         name: "openai",
         model: env.OPENAI_SCHEMA_MODEL || env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6-luna",
@@ -123,14 +105,14 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
   }
 
   /* The models the owner chose, then the other full models (one of them is almost always up when another is
-     overloaded: a 503 "high demand" is about a model, not a key), then the light ones as the last resort. The
-     validators check every answer, so a weaker model can only help, never slip a bad reading through. */
+     overloaded: a 503 "high demand" is about a model, not a key), then the light ones. The validators check every
+     answer, so a weaker model can only help, never slip a bad reading through. OpenAI comes only after all of them. */
   const chosen = uniqueValues([env.GEMINI_ANALYSIS_MODEL, env.GEMINI_DEEP_MODEL, env.GEMINI_MODEL]);
   const config = geminiModelConfig(env);
   const models = chosen.length ? uniqueValues([...chosen, ...config.extra, ...config.lite]) : [];
   candidates.push(...geminiCandidates(env, models, semanticStartOffset));
 
-  if (env.OPENAI_API_KEY && allowPaid(env)) {
+  if (openaiFallback(env)) {
     candidates.push({
       name: "openai",
       model: env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6.1-sol",
@@ -138,11 +120,6 @@ function providerCandidates(env, mode = "semantic", semanticStartOffset = 0) {
       keySlot: "OPENAI_API_KEY",
     });
   }
-
-  // If Gemini is out of quota and OpenAI is unavailable, the configured Groq
-  // keys can still read the remaining full sheets (with the same validation).
-  // Previously these keys were reachable only for formatting an existing answer.
-  candidates.push(...providerCandidates(env, "schema").filter(candidate => candidate.name === "groq"));
   return candidates;
 }
 
@@ -166,21 +143,6 @@ async function modelCapabilities(candidate, prompt, schema, transport) {
     };
   }
 
-  if (candidate.name === "groq") {
-    const listing = await transport("https://api.groq.com/openai/v1/models", {
-      headers: { Authorization: "Bearer " + candidate.key },
-    });
-    const meta = listing.data?.find((model) => model.id === candidate.model);
-    if (!meta) throw new Error("Configured Groq model is not available for this key");
-    if (meta.active === false) throw new Error("Configured Groq model is inactive");
-    return {
-      contextWindow: Number(meta.context_window || candidate.contextWindow),
-      outputLimit: Number(meta.max_completion_tokens || candidate.outputLimit),
-      inputTokens: Buffer.byteLength(prompt + JSON.stringify(schema), "utf8"),
-      verifiedLimits: true,
-    };
-  }
-
   if (candidate.name === "openai") {
     return {
       contextWindow: null,
@@ -198,18 +160,6 @@ function assertCapacity(capability, outputTokens) {
   if (capability.verifiedLimits === false) return;
   if (!Number.isFinite(capability.contextWindow) || !Number.isFinite(capability.outputLimit)) throw new Error("Unverified model capacity; configure analysis limits");
   if (capability.contextWindow < Math.ceil(capability.inputTokens * 1.3) + outputTokens || capability.outputLimit < outputTokens) throw new Error("Full input/output does not fit configured model; no truncation performed");
-}
-
-function outputBudget(candidate, capability, requested) {
-  // Groq's context window is shared by the full prompt and the answer. Reserve
-  // what fits instead of rejecting a long sheet merely because the preferred
-  // 64k answer allowance does not fit. Never shorten the input; finish_reason
-  // and schema validation below still reject every incomplete answer.
-  if (candidate.name !== "groq") return requested;
-  const available = Math.floor(capability.contextWindow - Math.ceil(capability.inputTokens * 1.3));
-  const budget = Math.min(requested, capability.outputLimit, available);
-  if (!Number.isFinite(budget) || budget < Math.min(requested, 1024)) throw new Error("Full input leaves insufficient answer capacity; no truncation performed");
-  return budget;
 }
 
 /* A reading of a few thousand characters (the Connections text) must not be allowed to hang for ten minutes on one
@@ -242,9 +192,9 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
       .join("");
   }
 
-  const endpoint = candidate.name === "groq"
-    ? "https://api.groq.com/openai/v1/chat/completions"
-    : "https://api.openai.com/v1/chat/completions";
+  if (candidate.name !== "openai") throw new Error("Unknown analysis provider: " + candidate.name);
+  // The only paid call of a sheet reading: log what it costs in characters, never the key.
+  console.info("[bond-analysis-paid] openai", candidate.model, "mode=" + mode, "promptChars=" + completePrompt.length);
 
   const body = {
     model: candidate.model,
@@ -257,7 +207,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
     reasoning_effort: mode === "schema" ? "low" : "high",
   };
 
-  const data = await transport(endpoint, {
+  const data = await transport("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     timeoutMs,
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + candidate.key },
@@ -265,10 +215,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
   });
 
   if (data.choices?.[0]?.finish_reason !== "stop") {
-    throw new Error(
-      "Incomplete " + (candidate.name === "groq" ? "Groq" : "OpenAI") +
-      " analysis: " + (data.choices?.[0]?.finish_reason || "no choice")
-    );
+    throw new Error("Incomplete OpenAI analysis: " + (data.choices?.[0]?.finish_reason || "no choice"));
   }
   return data.choices[0].message?.content;
 }
@@ -294,7 +241,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
   for (const candidate of candidates) {
     try {
       const capability = await modelCapabilities(candidate, repairPrompt, schema, transport);
-      const outputTokens = outputBudget(candidate, capability, options.outputTokens || 64000);
+      const outputTokens = options.outputTokens || 64000;
       assertCapacity(capability, outputTokens);
       const repairedRaw = await callStructuredCandidate(candidate, repairPrompt, schema, outputTokens, transport, "schema");
       const result = JSON.parse(repairedRaw);
@@ -330,7 +277,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
   const failures = [];
   const clock = options.clock || Date.now;
   if (!candidates.length) {
-    const error = new Error("No free analysis provider is configured: set GEMINI_API_KEY_2..8 with a GEMINI_ANALYSIS_MODEL (or GEMINI_DEEP_MODEL / GEMINI_MODEL), or Groq keys. The paid GEMINI_API_KEY and OpenAI are used only with AI_ALLOW_PAID_BACKGROUND=1.");
+    const error = new Error("No analysis provider is configured: set GEMINI_API_KEY_2..8 with a GEMINI_ANALYSIS_MODEL (or GEMINI_DEEP_MODEL / GEMINI_MODEL), or OPENAI_API_KEY. The paid GEMINI_API_KEY is used only with AI_ALLOW_PAID_BACKGROUND=1.");
     error.failures = [];
     throw error;
   }
@@ -353,7 +300,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     let raw = "";
     try {
       const capability = await modelCapabilities(candidate, prompt, schema, transport);
-      const outputTokens = outputBudget(candidate, capability, options.outputTokens || 64000);
+      const outputTokens = options.outputTokens || 64000;
       assertCapacity(capability, outputTokens);
       raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode);
       geminiLedgerOf(candidate)?.succeed(candidate.key, candidate.model);
