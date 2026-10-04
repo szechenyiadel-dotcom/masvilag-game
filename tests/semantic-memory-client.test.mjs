@@ -229,7 +229,7 @@ test("Characters that acted lately are the ones whose whole sheet is read", () =
 test("App wiring: recall before player-facing replies, own-sheet sync and event flush by world changes", () => {
   const source = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.match(source, /const \{ memory, \.\.\.askOptions \} = options;/);
-  assert.match(source, /insertBeforeProtectedTail\(prompt, memoryBlock\) \+ bondGenerationContext\(w\)/);
+  assert.match(source, /insertBeforeProtectedTail\(prompt, \[memoryBlock, bondContextFor\(w, memory, prompt\)\]\.filter\(Boolean\)\.join\("\\n"\)\)/, "the bond context goes before the protected tail, scoped to the characters the call is about");
   assert.match(source, /if \(charId && latestText\) forward\.memory = \{ ids: \[charId\], query: latestText \};/);
   assert.match(source, /memory: \{ ids: groupAiIds\.slice\(0, 4\)/);
   assert.match(source, /memory: \{ ids: \(scene\.cast \|\| \[\]\)\.filter\(\(id\) => !isHuman\(w, id\)\)\.slice\(0, 4\)/);

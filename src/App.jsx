@@ -1,5 +1,5 @@
 import { restoreBaselineGraph } from "./bondAnalysis.js";
-import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, sheetFields, flattenSheetValue } from "./bondClient.js";
+import { bondSourceFingerprint, analysisReady, rebuildBondGraph, installBondGraph, bondGenerationContext, bondScopeIds, sheetFields, flattenSheetValue } from "./bondClient.js";
 import { sheetSyncJobs, markSheetSynced, recentActorIds, runSheetSync, eventMemoryBatch, runEventFlush, recallMemories, recallBlock, insertBeforeProtectedTail, memoryQueryFromEvents, RECALL_MAX_CHARACTERS, BACKGROUND_RECALL_TOP_K } from "./semanticMemory.js";
 import { focusedScope, inScope, relationshipInScope, eventInScope, strongestTieIds, groupsForScope } from "./aiScope.js";
 import { latestPlayerTriggerAt, ambientGateOpen, ambientGateAfterRun } from "./ambientGate.js";
@@ -8849,10 +8849,19 @@ async function askJSON(system, prompt, options = {}) {
   }
 }
 
+/* The private bond context of one AI call: only the characters the call is about (the ones the caller names, plus whoever
+   the player's latest line names; without a caller's list, whoever the prompt names), and placed BEFORE the protected tail
+   so the tail (the latest turns and the player's newest line) stays the last thing the model reads. */
+function bondContextFor(w, memory, prompt) {
+  const ids = memory && Array.isArray(memory.ids) ? memory.ids : [];
+  const scope = bondScopeIds(allSubjects(w), { ids, text: ids.length ? String(memory.query || "") : String(prompt || ""), playerId: w.meId });
+  return bondGenerationContext(w, scope);
+}
+
 function askWorldJSON(w, system, prompt, options = {}) {
   if (!analysisReady(w, allSubjects)) return Promise.reject(new Error("A teljes karakterlap- és kapcsolatelemzés még nem készült el."));
   const { memory, ...askOptions } = options;
-  const run = (memoryBlock) => askJSON(system, insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w), { ...askOptions, keepFullPrompt: true, language: worldLanguage(w) });
+  const run = (memoryBlock) => askJSON(system, insertBeforeProtectedTail(prompt, [memoryBlock, bondContextFor(w, memory, prompt)].filter(Boolean).join("\n")), { ...askOptions, keepFullPrompt: true, language: worldLanguage(w) });
   /* No memory option: exactly the old path, no extra step. */
   return memory ? memoryPromptBlock(w, memory).then(run) : run("");
 }
@@ -8877,7 +8886,7 @@ async function askWorldJSONInteractive(
     const memoryBlock = await memoryPromptBlock(w, memory);
     return await askJSON(
       system,
-      insertBeforeProtectedTail(prompt, memoryBlock) + bondGenerationContext(w),
+      insertBeforeProtectedTail(prompt, [memoryBlock, bondContextFor(w, memory, prompt)].filter(Boolean).join("\n")),
       {
         ...askOptions,
         keepFullPrompt: true,

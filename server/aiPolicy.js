@@ -471,6 +471,13 @@ export function paidMaxInputChars(env = {}) {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_PAID_MAX_INPUT_CHARS;
 }
 
+/* A reply the player reads (a DM, a scene turn) gets half again as much room under the paid ceiling: it has to carry
+   the conversation and the relationship it answers. Everything else keeps the base ceiling. */
+export const PAID_PLAYER_FACING_SOURCES = Object.freeze(["dm", "scene"]);
+export function paidCeilingFor(source, base) {
+  return base > 0 && PAID_PLAYER_FACING_SOURCES.includes(String(source || "").trim().toLowerCase()) ? Math.floor(base * 1.5) : base;
+}
+
 /* How much of each part of a prompt may stay when the whole must fit maxChars: the system part gets up to
    systemShare of it, the latest message the most of the rest. Nothing is cut that already fits. */
 export function planCharBudget({ maxChars, systemChars = 0, messageChars = [], systemShare = 0.5 }) {

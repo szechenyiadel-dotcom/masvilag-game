@@ -7,7 +7,7 @@ import {
   isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN, planGroqRequest,
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
   createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson,
-  PAID_INPUT_PROVIDERS, paidMaxInputChars, planCharBudget, createUsageMeter, createRefusalTracker, orderByRefusals,
+  PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter, createRefusalTracker, orderByRefusals,
 } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -179,7 +179,7 @@ function groqPath({ env = {}, respond, pacer = createGroqPacer() } = {}) {
     process: { env }, console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error, AbortController, setTimeout, clearTimeout,
     planGroqRequest, isForegroundRequest, estimateGroqTokens, groqPaceMaxWaitMs,
-    PAID_INPUT_PROVIDERS, paidMaxInputChars, planCharBudget, createUsageMeter,
+    PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter,
     GROQ_PACER: pacer,
     fetch: async (url, options) => {
       sent.push(JSON.parse(options.body));
@@ -599,7 +599,7 @@ const sentChars = (payload) => payload.messages.reduce((n, m) => n + m.content.l
 test("DeepSeek and Mistral are sent at most the ceiling, whatever the prompt grew to, and the protected tail survives", async () => {
   for (const provider of ["openrouter3", "mistral", "mistral2"]) {
     const { context, sent } = groqPath({ env: {} });
-    const body = { ...bigBody(), system: "S".repeat(40000), messages: [{ role: "user", content: "W".repeat(80000) + "\n[[PROTECTED_TAIL]]\nThe player just wrote: hello" }] };
+    const body = { ...bigBody(), source: "comments", system: "S".repeat(40000), messages: [{ role: "user", content: "W".repeat(80000) + "\n[[PROTECTED_TAIL]]\nThe player just wrote: hello" }] };
     await callPaid(context, provider, body);
     assert.equal(sent.length, 1);
     assert.ok(sentChars(sent[0]) <= 60000 + 200, provider + " sent " + sentChars(sent[0]));
@@ -616,7 +616,7 @@ test("A prompt under the ceiling goes out exactly as it is", async () => {
 });
 
 test("PAID_MAX_INPUT_CHARS moves the ceiling, and 0 switches it off", async () => {
-  const body = { source: "dm", system: "S".repeat(10000), messages: [{ role: "user", content: "W".repeat(30000) }], max_tokens: 300 };
+  const body = { source: "comments", system: "S".repeat(10000), messages: [{ role: "user", content: "W".repeat(30000) }], max_tokens: 300 };
   const lowered = groqPath({ env: { PAID_MAX_INPUT_CHARS: "20000" } });
   await callPaid(lowered.context, "openrouter3", body);
   assert.ok(sentChars(lowered.sent[0]) <= 20200, "sent " + sentChars(lowered.sent[0]));
@@ -735,5 +735,19 @@ test("A paid DM request keeps all 14 turns of the conversation, the rules and th
   assert.ok(message.includes("MANDATORY RESPONSE BEHAVIOR"), "the rules are still there");
   assert.ok(message.endsWith('yeah I\'m here... "boyfriend"'), "and the player's newest line is the very last thing");
   assert.ok(message.includes("VOICE / WRITING-STYLE CARD"), "with the voice card");
-  assert.ok(textLength(sent[0]) <= 61000, "all of it still within the paid ceiling");
+  assert.ok(textLength(sent[0]) <= 91000, "all of it still within the (player-facing) paid ceiling");
+});
+
+test("A reply the player reads gets half again as much room under the paid ceiling; other work keeps the base", async () => {
+  assert.equal(paidCeilingFor("dm", 60000), 90000);
+  assert.equal(paidCeilingFor("scene", 60000), 90000);
+  assert.equal(paidCeilingFor("comments", 60000), 60000);
+  assert.equal(paidCeilingFor("dm", 0), 0, "0 still switches the ceiling off");
+  const dm = groqPath();
+  await dm.context.proxyCompatibleMessage("mistral2", "key", "m", "https://api.mistral.ai/x", dmBody());
+  const dmSize = textLength(dm.sent[0]);
+  assert.ok(dmSize > 60500 && dmSize <= 91000, "dm: " + dmSize);
+  const other = groqPath();
+  await other.context.proxyCompatibleMessage("mistral2", "key", "m", "https://api.mistral.ai/x", { ...dmBody(), source: "comments" });
+  assert.ok(textLength(other.sent[0]) <= 61000, "another source stays at the base ceiling");
 });
