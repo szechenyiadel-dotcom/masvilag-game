@@ -160,22 +160,55 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
   return candidates;
 }
 
-async function modelCapabilities(candidate, prompt, schema, transport) {
+/* Model metadata is identical for every sheet. Cache it per transport/model so twenty Connections
+   readings do not spend twenty extra network round-trips asking Gemini the same question. A failed lookup is
+   never cached, so another key/model can still recover normally. */
+const MODEL_META_CACHE = new WeakMap();
+async function geminiModelMeta(candidate, transport, root, headers) {
+  let byModel = MODEL_META_CACHE.get(transport);
+  if (!byModel) { byModel = new Map(); MODEL_META_CACHE.set(transport, byModel); }
+  let pending = byModel.get(candidate.model);
+  if (!pending) {
+    pending = transport(root, { headers, timeoutMs: 60000 }).then((meta) => {
+      if (!meta.supportedGenerationMethods?.includes("generateContent")) throw new Error("Configured Gemini model cannot generate content");
+      return meta;
+    }).catch((error) => {
+      byModel.delete(candidate.model);
+      throw error;
+    });
+    byModel.set(candidate.model, pending);
+  }
+  return pending;
+}
+
+const FAST_PROFILE_PREFLIGHT_MAX_CHARS = 50000;
+
+async function modelCapabilities(candidate, prompt, schema, transport, { fastCapacityCheck = false } = {}) {
+  const completeInput = prompt + "\nJSON SCHEMA:\n" + JSON.stringify(schema);
   if (candidate.name === "gemini") {
     const root = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model);
     const headers = { "x-goog-api-key": candidate.key, "Content-Type": "application/json" };
-    const meta = await transport(root, { headers, timeoutMs: 60000 });
-    if (!meta.supportedGenerationMethods?.includes("generateContent")) throw new Error("Configured Gemini model cannot generate content");
-    const count = await transport(root + ":countTokens", {
-      method: "POST",
-      headers,
-      timeoutMs: 60000,
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt + "\nJSON SCHEMA:\n" + JSON.stringify(schema) }] }] }),
-    });
+    const meta = await geminiModelMeta(candidate, transport, root, headers);
+
+    let inputTokens;
+    if (fastCapacityCheck && completeInput.length <= FAST_PROFILE_PREFLIGHT_MAX_CHARS) {
+      /* Connections is deliberately tiny compared with Gemini context windows. A conservative local estimate
+         (one token per two UTF-8 bytes) is enough for the capacity guard and avoids a separate countTokens request
+         for every character. Longer/unusual inputs keep the exact remote count. */
+      inputTokens = Math.max(1, Math.ceil(Buffer.byteLength(completeInput, "utf8") / 2));
+    } else {
+      const count = await transport(root + ":countTokens", {
+        method: "POST",
+        headers,
+        timeoutMs: 60000,
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: completeInput }] }] }),
+      });
+      inputTokens = Number(count.totalTokens);
+    }
     return {
       contextWindow: meta.inputTokenLimit,
       outputLimit: meta.outputTokenLimit,
-      inputTokens: Number(count.totalTokens),
+      inputTokens,
       verifiedLimits: true,
     };
   }
@@ -184,7 +217,7 @@ async function modelCapabilities(candidate, prompt, schema, transport) {
     return {
       contextWindow: null,
       outputLimit: null,
-      inputTokens: Buffer.byteLength(prompt + JSON.stringify(schema), "utf8"),
+      inputTokens: Buffer.byteLength(completeInput, "utf8"),
       verifiedLimits: false,
     };
   }
@@ -375,7 +408,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
     }
     let raw = "";
     try {
-      const capability = await modelCapabilities(candidate, prompt, schema, transport);
+      const capability = await modelCapabilities(candidate, prompt, schema, transport, { fastCapacityCheck: options.fastCapacityCheck === true });
       const outputTokens = options.outputTokens || 64000;
       assertCapacity(capability, outputTokens);
       raw = await callStructuredCandidate(candidate, prompt, schema, outputTokens, transport, mode, options.thinkingLevel);
@@ -512,6 +545,16 @@ export function strangerBond(owner, target, ownerName, targetName, language) {
    Every `resumeEveryMs` the server picks up the readings that are still pending (and were touched recently), whose
    retry time has come and that nobody is running, and runs them again. `resumeEveryMs: 0` switches that off. */
 const RESUME_WINDOW_SECONDS = 30 * 60;
+
+/* The old blanket 64K output allowance made a 4K-character Connections field look like a huge generation job.
+   These are ceilings, not targets: they preserve the complete schema while preventing runaway output and let
+   smaller/faster models pass capacity checks. No source text is truncated. */
+export function bondAnalysisOutputTokens(stage, sourceChars = 0, targetCount = 0) {
+  const chars = Math.max(0, Number(sourceChars) || 0);
+  if (stage === "profile") return Math.min(18000, Math.max(6000, 6000 + Math.ceil(chars * 2)));
+  const targets = Math.max(1, Number(targetCount) || 1);
+  return Math.min(32000, Math.max(8000, 4000 + targets * 2800));
+}
 
 export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity, stringifyJsonbSafe, analyze = analyzeStructured, env = process.env, clock = Date.now, ledger = null, resumeEveryMs = 0 }) {
   // One scheduler for every job. The browser may submit all sheets at once; the
@@ -655,11 +698,20 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     const attempts = previous?.terminal ? 0 : Number(previous?.attempts || 0);
     const work = async () => {
       try {
-        console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length }));
+        console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length, outputTokens: bondAnalysisOutputTokens(stage, metadata.sourceChars, prepared.missing?.length || 0), fastCapacityCheck: stage === "profile" }));
         const startedAt = clock();
-        // Reading the names and quotes out of a short Connections text is mechanical: it does not need the long thinking
-        // that the relationship reading itself gets (72-118 s became tens of seconds).
-        const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock, ledger, thinkingLevel: stage === "profile" ? "LOW" : "HIGH" });
+        // Reading the names and quotes out of a short Connections text is mechanical: keep the full source,
+        // but do not reserve a 64K answer or spend a countTokens round-trip on this small profile extraction.
+        const outputTokens = bondAnalysisOutputTokens(stage, metadata.sourceChars, prepared.missing?.length || 0);
+        const analyzed = await analyze(prompt, schema, validate, {
+          outputTokens,
+          fastCapacityCheck: stage === "profile",
+          semanticStartOffset: rotation++,
+          deadline: clock() + deadlineMs,
+          clock,
+          ledger,
+          thinkingLevel: stage === "profile" ? "LOW" : "HIGH",
+        });
         console.info("[bond-analysis-done]", stage, owner, analyzed.provider + "/" + analyzed.model, "[" + analyzed.keySlot + "]", analyzed.formatterModel ? "formatted by " + analyzed.formatterModel : "", "ms=" + (clock() - startedAt));
         if (stage === "baseline") {
           // Noted before the pairs become visible, so a request that finds them cached never misses the count.
