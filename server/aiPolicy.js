@@ -108,6 +108,7 @@ export function geminiRateLimitInfo(payload, nowMs = Date.now()) {
   const extra = {
     retryDelayMs,
     limit: Number(violation.quotaValue) || 0,
+    limitKnown: violation.quotaValue !== undefined && String(violation.quotaValue).trim() !== "",
     quotaId: String(violation.quotaId || violation.quotaMetric || ""),
     quotaModel: String(violation.quotaDimensions?.model || ""),
   };
@@ -357,8 +358,15 @@ export function createGeminiLedger({ now = Date.now } = {}) {
     }
     if (code === 429) {
       const info = geminiRateLimitInfo(payload, at);
-      extend(pairRest, pairId(key, model), at + info.restMs);
       streaks.delete(pairId(key, model));
+      /* Google says the daily limit is ZERO: the model has no free quota at all, so no key will ever have any
+         (it is not "used up"). It rests until the quota day turns over, on every key, instead of being probed
+         on each key in turn. */
+      if (info.metric === "per-day" && info.limitKnown && info.limit === 0) {
+        extend(modelRest, model, at + info.restMs);
+        return { level: "model-no-free-quota", restMs: info.restMs, metric: info.metric, limit: 0, quotaId: info.quotaId, quotaModel: info.quotaModel };
+      }
+      extend(pairRest, pairId(key, model), at + info.restMs);
       return { level: "model", restMs: info.restMs, metric: info.metric, limit: info.limit, quotaId: info.quotaId, quotaModel: info.quotaModel };
     }
     if (code === 404 && /models\/\S+ is not found|is not found for api version|not supported for generatecontent|model[^.]*does not exist|no longer available|model[^.]*is not available/i.test(text)) {

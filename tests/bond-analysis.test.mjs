@@ -750,3 +750,18 @@ test("A repair that Groq's free tier could never take (413) no longer ends the j
   });
   assert.equal(out.result.formatterProvider, "gemini");
 });
+
+test("A model with no free quota (limit 0) is asked once, not on every key, and the log says what Google answered", async () => {
+  const zero = () => Object.assign(new Error("Analysis provider HTTP 429: quota"), { status: 429, payload: { error: { details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "0" }] }] } } });
+  const logged = [];
+  const original = console.warn;
+  console.warn = (...args) => logged.push(args.join(" "));
+  try {
+    const ledger = createGeminiLedger();
+    const out = await ladderRun({ ledger, answer: ({ model }) => { if (model === "pro-x") throw zero(); return ok; } });
+    assert.equal(out.result.model, "flash-x");
+    assert.deepEqual(out.attempted, ["pro-x@g2", "flash-x@g2"], "pro-x was asked on one key only");
+    assert.ok(logged.some((line) => /\[bond-analysis-gemini\] pro-x GEMINI_API_KEY_2 HTTP 429 model-no-free-quota\/per-day limit=0 GenerateRequestsPerDay/.test(line)), logged.join(" | "));
+    assert.ok(!logged.some((line) => /g2|g3/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
+  } finally { console.warn = original; }
+});

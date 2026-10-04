@@ -4901,6 +4901,7 @@ async function proxyGeminiMessage(body) {
       const what = outcome.metric === "no-credit" ? "out of prepaid credit"
         : outcome.metric === "invalid-key" ? "invalid/rejected"
         : outcome.level === "model-gone" ? "model not available"
+        : outcome.level === "model-no-free-quota" ? "has no free quota (limit 0" + (outcome.quotaId ? ", " + outcome.quotaId : "") + ")"
         : outcome.metric === "busy" ? "overloaded (high demand)"
         : outcome.metric === "unavailable" ? "failing repeatedly (" + status + ")"
         : "out of quota (" + outcome.metric + (outcome.limit ? ", limit " + outcome.limit : "") + (outcome.quotaId ? ", " + outcome.quotaId : "") + ")";
