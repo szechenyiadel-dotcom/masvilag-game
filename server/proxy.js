@@ -5194,8 +5194,11 @@ function providerModel(provider, body = {}) {
   if (provider === "groq2") {
     return GROQ_MODEL_2 || GROQ_MODEL || "";
   }
+  if (provider === "openrouter-dm-free") {
+    return String(process.env.OPENROUTER_DM_FREE_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition:free").trim();
+  }
   if (provider === "openrouter-dm") {
-    return String(process.env.OPENROUTER_DM_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition:free").trim();
+    return String(process.env.OPENROUTER_DM_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition").trim();
   }
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
@@ -5242,6 +5245,7 @@ async function callMessageProvider(provider, body) {
   if (provider === "mistral2") return proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, providerModel("mistral2", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, providerModel("groq", body), "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "groq2") return proxyCompatibleMessage("groq2", GROQ_API_KEY_2, providerModel("groq2", body), "https://api.groq.com/openai/v1/chat/completions", body);
+  if (provider === "openrouter-dm-free") return proxyCompatibleMessage("openrouter-dm-free", process.env.OPENROUTER_API_KEY, providerModel("openrouter-dm-free", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter-dm") return proxyCompatibleMessage("openrouter-dm", process.env.OPENROUTER_API_KEY, providerModel("openrouter-dm", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openai") {
     const result = await proxyOpenAIMessage(body);
@@ -5260,6 +5264,7 @@ function configuredAIProvider(provider) {
   if (provider === "mistral2") return Boolean(MISTRAL_API_KEY_2 && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
   if (provider === "groq2") return Boolean(GROQ_API_KEY_2 && (GROQ_MODEL_2 || GROQ_MODEL));
+  if (provider === "openrouter-dm-free") return Boolean(process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter-dm") return Boolean(process.env.OPENROUTER_API_KEY);
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
   if (provider === "openrouter3") return Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL_3);
@@ -5610,11 +5615,11 @@ function providerAllowedForBody(provider, body) {
   const chars = aiRequestChars(body);
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
   return provider === "mistral" || provider === "mistral2" || provider === "gemini" || provider === "openai" ||
-    provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2" || provider === "openrouter-dm";
+    provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2" || provider === "openrouter-dm-free" || provider === "openrouter-dm";
 }
 
 /* Provider roles are intentionally strict.
-   - DM: OpenRouter Dolphin Venice (free) -> Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
+   - DM: OpenRouter Dolphin Venice free -> Dolphin Venice standard -> Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
    - Scene: Mistral Small 1 -> Mistral Small 2 (also when the world starts it).
    - Feed: Gemini -> OpenAI.
    - Comments/replies: OpenRouter3 / DeepSeek Flash -> Mistral Small 1 -> Mistral Small 2.
@@ -5649,8 +5654,8 @@ function taskProviderOrder(requestedProvider, body) {
      everything else in the background stays free. */
   const playerWaiting = isForegroundRequest(body);
   if (source === "dm") {
-    /* Direct messages: the uncensored/free Dolphin Venice OpenRouter model first, then Mistral Small key 1 -> key 2. */
-    raw = ["openrouter-dm", "mistral", "mistral2"];
+    /* Direct messages: free Dolphin Venice first, the standard Dolphin Venice route second, then Mistral Small key 1 -> key 2. */
+    raw = ["openrouter-dm-free", "openrouter-dm", "mistral", "mistral2"];
   } else if (source === "scene") {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
@@ -5674,8 +5679,8 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini"];
   }
 
-  /* Whoever has been refusing most of this kind of request goes to the end of the chain. */
-  raw = orderByRefusals(raw, source, AI_REFUSALS);
+  /* Keep the DM chain exact; other request kinds may still demote a provider that repeatedly refuses. */
+  if (source !== "dm") raw = orderByRefusals(raw, source, AI_REFUSALS);
 
   /* Background work stays on free providers; only a player-waiting request may use paid ones. */
   return filterProvidersForBody(
@@ -5863,7 +5868,12 @@ async function executeAITask(task) {
 
     /* A model that answers a request for JSON with a polite refusal gave no answer: the next provider tries. */
     const askedForJson = result?.ok && requestExpectsJson(task.body);
-    const refusedByText = askedForJson && looksLikeRefusal(answerText(result));
+    const dmDolphinRefusal =
+      result?.ok &&
+      kindOfRequest === "dm" &&
+      (provider === "openrouter-dm-free" || provider === "openrouter-dm") &&
+      looksLikeRefusal(answerText(result));
+    const refusedByText = (askedForJson && looksLikeRefusal(answerText(result))) || dmDolphinRefusal;
     if (askedForJson) AI_REFUSALS.record(provider, kindOfRequest, refusedByText);
     if (refusedByText) {
       attempts.push({ provider, model, status: 422, message: "refused: " + answerText(result).slice(0, 120), refused: true });
