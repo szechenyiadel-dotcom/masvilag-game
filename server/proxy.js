@@ -5323,25 +5323,31 @@ function preservePromptEdges(text, max) {
   const value = String(text || "");
   if (value.length <= max) return value;
 
-  const fidelityStartMarker = "[[CHARACTER_FIDELITY]]";
-  const fidelityEndMarker = "[[/CHARACTER_FIDELITY]]";
-  const fidelityAt = value.indexOf(fidelityStartMarker);
-  const fidelityEndAt = fidelityAt >= 0
-    ? value.indexOf(fidelityEndMarker, fidelityAt + fidelityStartMarker.length)
-    : -1;
-  const fidelityEnd = fidelityEndAt >= 0 ? fidelityEndAt + fidelityEndMarker.length : -1;
-  const fidelityBlock = fidelityAt >= 0 && fidelityEnd > fidelityAt
-    ? value.slice(fidelityAt, fidelityEnd)
-    : "";
+  const spanOf = (startMarker, endMarker) => {
+    const at = value.indexOf(startMarker);
+    const endAt = at >= 0 ? value.indexOf(endMarker, at + startMarker.length) : -1;
+    return at >= 0 && endAt > at ? { start: at, end: endAt + endMarker.length } : null;
+  };
+  const fidelitySpan = spanOf("[[CHARACTER_FIDELITY]]", "[[/CHARACTER_FIDELITY]]");
+  const fidelityBlock = fidelitySpan ? value.slice(fidelitySpan.start, fidelitySpan.end) : "";
 
   /* CLAUDE FIX R2: never cut the protected tail (latest player input, DM reason, author roster). */
   let protectedAt = value.lastIndexOf("[[PROTECTED_TAIL]]");
   if (protectedAt < 0) protectedAt = value.indexOf("[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]");
-  const protectedTail = protectedAt >= 0 && (fidelityEnd < 0 || protectedAt >= fidelityEnd)
-    ? value.slice(protectedAt)
-    : "";
+  const tailSpan = protectedAt >= 0 && (!fidelitySpan || protectedAt >= fidelitySpan.end)
+    ? { start: protectedAt, end: value.length }
+    : null;
+  const protectedTail = tailSpan ? value.slice(tailSpan.start) : "";
 
-  if (fidelityBlock || protectedTail) {
+  /* The private bond context of the characters a call is about (who is who to whom, who knows what): the model cannot
+     write a believable DM, scene or comment without it, so it is never squeezed out by the filler around it. */
+  const bondSpan = spanOf("[[FULL_BOND_CONTEXT]]", "[[/FULL_BOND_CONTEXT]]");
+  const bondUsable = bondSpan
+    && (!fidelitySpan || bondSpan.start >= fidelitySpan.end || bondSpan.end <= fidelitySpan.start)
+    && (!tailSpan || bondSpan.end <= tailSpan.start);
+  const bondBlock = bondUsable ? value.slice(bondSpan.start, bondSpan.end) : "";
+
+  if (fidelityBlock || protectedTail || bondBlock) {
     const compactBlock = (block, cap, label) => {
       if (!block || block.length <= cap) return block;
       const note = "\n...[" + label + " compacted, protected]...\n";
@@ -5350,34 +5356,40 @@ function preservePromptEdges(text, max) {
       const tail = Math.max(0, usable - head);
       return block.slice(0, head) + note + (tail ? block.slice(-tail) : "");
     };
+    /* The bond context lists what matters first (rules, the current bonds, who knows what) and the profiles last, so a
+       cut loses the least important part, and the closing marker stays in place. */
+    const compactBond = (block, cap) => {
+      if (!block || block.length <= cap) return block;
+      const note = "\n...[bond context compacted, protected]...\n[[/FULL_BOND_CONTEXT]]";
+      return block.slice(0, Math.max(0, cap - note.length)) + note;
+    };
     /* What the reply depends on is the protected tail (the last turns of this very conversation, the voice card, the
        rules, the player's latest line): it stays whole while it fits in 55% of the room, and only what lies beyond is
        compacted. Cutting it at a third of the room used to drop the newest turns from the middle, and the character then
-       answered a line it had no context for. The character canon gets what is left, up to 60%, and the rest of the
-       prompt keeps at least 8%. */
+       answered a line it had no context for. The bond context of the people involved keeps up to 40% of what the tail
+       leaves, the character canon gets what is left, up to 60%, and the rest of the prompt keeps at least 8%. */
     const tailCap = protectedTail ? Math.min(protectedTail.length, Math.floor(max * 0.55)) : 0;
-    const fidelityCap = Math.min(Math.floor(max * 0.60), Math.max(0, max - tailCap - Math.floor(max * 0.08)));
+    const bodyFloor = Math.floor(max * 0.08);
+    const bondCap = bondBlock ? Math.min(bondBlock.length, Math.floor(max * 0.40), Math.max(0, max - tailCap - bodyFloor)) : 0;
+    const fidelityCap = Math.min(Math.floor(max * 0.60), Math.max(0, max - tailCap - bondCap - bodyFloor));
     const keptFidelity = compactBlock(fidelityBlock, fidelityCap, "character fidelity");
+    const keptBond = compactBond(bondBlock, bondCap);
     const keptTail = compactBlock(protectedTail, Math.max(tailCap, Math.floor(max * 0.32)), "latest protected tail");
 
     let body = value;
-    if (fidelityBlock) body = body.slice(0, fidelityAt) + body.slice(fidelityEnd);
-    if (protectedTail) {
-      let tailAtInBody = body.lastIndexOf("[[PROTECTED_TAIL]]");
-      if (tailAtInBody < 0) tailAtInBody = body.indexOf("[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]");
-      if (tailAtInBody >= 0) body = body.slice(0, tailAtInBody);
-    }
+    for (const span of [fidelitySpan && fidelityBlock ? fidelitySpan : null, bondBlock ? bondSpan : null, tailSpan]
+      .filter(Boolean).sort((a, b) => b.start - a.start)) body = body.slice(0, span.start) + body.slice(span.end);
     body = body.trim();
 
     const note = "\n...[context compacted by AI gate; character fidelity + newest beat preserved]...\n";
-    const room = Math.max(0, max - keptFidelity.length - keptTail.length - note.length - 8);
+    const room = Math.max(0, max - keptFidelity.length - keptBond.length - keptTail.length - note.length - 12);
     let keptBody = body;
     if (keptBody.length > room) {
       const head = Math.floor(room * 0.58);
       const tail = Math.max(0, room - head);
       keptBody = keptBody.slice(0, head) + note + (tail ? keptBody.slice(-tail) : "");
     }
-    return [keptFidelity, keptBody, keptTail].filter(Boolean).join("\n\n").slice(0, max);
+    return [keptFidelity, keptBody, keptBond, keptTail].filter(Boolean).join("\n\n").slice(0, max);
   }
 
   const head = Math.floor(max * 0.72);

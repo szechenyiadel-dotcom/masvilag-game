@@ -420,21 +420,30 @@ export function bondScopeIds(people, { text = "", ids = [], playerId = null } = 
 }
 
 /* scope: ids of the characters the call is about (null = everyone). The context then holds only their profiles, the
-   bonds among them and what they know of each other, so it no longer grows with the size of the cast. */
+   bonds among them and what they know of each other, so it no longer grows with the size of the cast. What matters most
+   comes first (the bonds), the profiles last: when a prompt has to be cut, the end goes first. */
 export function bondGenerationContext(world, scope = null) {
   if (!world.bondAnalysis) return "";
   const keep = Array.isArray(scope) && scope.length ? new Set(scope) : null;
   const inScope = (id) => !keep || keep.has(id);
   const profileIds = Object.keys(world.bondAnalysis.profiles).filter(inScope);
   const bonds = Object.entries(world.rels || {}).filter(([, bond]) => !keep || (inScope(bond.from) && inScope(bond.to)));
+  /* What a profile says about someone who is not part of this call is not needed here (their own bond rows carry it). */
+  const aboutScope = (rows) => (Array.isArray(rows) && keep ? rows.filter((row) => !row || !row.targetId || inScope(row.targetId)) : rows);
+  const profileOf = (id) => {
+    const profile = compactProfile(world.bondAnalysis.profiles[id].profile);
+    return keep && profile && typeof profile === "object" ? { ...profile, mentions: aboutScope(profile.mentions), facts: aboutScope(profile.facts) } : profile;
+  };
+  /* A bond the actor knows in full is listed in currentBonds already: here only the private part and who knows it. */
+  const knownBy = (id, [, bond]) => (bond.from === id || bond.whoKnows?.includes(id)
+    ? { from: bond.from, to: bond.to, hiddenFeelings: bond.hiddenFeelings ?? null, whoKnows: bond.whoKnows || [] }
+    : { from: bond.from, to: bond.to, publicFace: bond.publicFace });
   return "\n[[FULL_BOND_CONTEXT]]\n" + JSON.stringify({
-    rules: "Full profiles/currentBonds are PRIVATE director data and override older brief, identity, bible or keyword-derived relationship hints. For each actor, knowledgeByActor is the only authority on other actors' private bond knowledge. CURRENT directed bonds govern every actor including AI–AI. Profiles are private actor source, never shared knowledge. A character may know another's secret ONLY when their ID occurs in whoKnows. publicFace is the sole default public view. Never mirror hidden feelings, attraction or private source into reverse knowledge. A group tie does not imply friendship. Preserve all current fields; in-game evolution overrides baseline history. For every directed relationship change emit updated description (4–8 sentences), summary, publicFace, hiddenFeelings, history, dynamics, wants, status, levels and whoKnows where the event changes them, alongside existing a/b/delta/mood/why fields. PublicFace excludes private feelings; mood is private emotional state. Newly formed secrets reset witnesses to actual knowing IDs. Baselines never change during gameplay. Never reveal unknown secrets in posts, gossip, popups, chat or scenes.",
-    profiles: Object.fromEntries(profileIds.map((id) => [id, compactProfile(world.bondAnalysis.profiles[id].profile)])),
+    rules: "Full profiles/currentBonds are PRIVATE director data and override older brief, identity, bible or keyword-derived relationship hints. For each actor, knowledgeByActor is the only authority on other actors' private bond knowledge: an entry with whoKnows/hiddenFeelings is a bond that actor knows in full (all other fields as in currentBonds), an entry with only publicFace is all the actor sees of it. CURRENT directed bonds govern every actor including AI–AI. Profiles are private actor source, never shared knowledge. A character may know another's secret ONLY when their ID occurs in whoKnows. publicFace is the sole default public view. Never mirror hidden feelings, attraction or private source into reverse knowledge. A group tie does not imply friendship. Preserve all current fields; in-game evolution overrides baseline history. For every directed relationship change emit updated description (4–8 sentences), summary, publicFace, hiddenFeelings, history, dynamics, wants, status, levels and whoKnows where the event changes them, alongside existing a/b/delta/mood/why fields. PublicFace excludes private feelings; mood is private emotional state. Newly formed secrets reset witnesses to actual knowing IDs. Baselines never change during gameplay. Never reveal unknown secrets in posts, gossip, popups, chat or scenes.",
     currentBonds: Object.fromEntries(bonds.map(([key, bond]) => [key, compactBond(bond)])),
     knowledgeByActor: Object.fromEntries(profileIds.map((id) => [id,
-      Object.fromEntries(bonds.filter(([, bond]) => bond.from === id || bond.to === id).map(([key, bond]) => [key,
-        bond.from === id || bond.whoKnows?.includes(id) ? compactBond(bond) : { from: bond.from, to: bond.to, publicFace: bond.publicFace }
-      ]))
+      Object.fromEntries(bonds.filter(([, bond]) => bond.from === id || bond.to === id).map((entry) => [entry[0], knownBy(id, entry)]))
     ])),
+    profiles: Object.fromEntries(profileIds.map((id) => [id, profileOf(id)])),
   }) + "\n[[/FULL_BOND_CONTEXT]]";
 }

@@ -278,7 +278,7 @@ export function createGroqPacer({ budgetTokens = GROQ_FREE_TPM_BUDGET, windowMs 
 /* The free tier counts quota per project AND per model, so one key has several independent daily
    buckets. The ladder uses them in turn instead of declaring a whole key spent. */
 export const DEFAULT_GEMINI_PRIMARY_MODEL = "gemini-3.8-flash";
-export const DEFAULT_GEMINI_EXTRA_MODELS = Object.freeze(["gemini-3.7-flash", "gemini-3.6-flash"]);
+export const DEFAULT_GEMINI_EXTRA_MODELS = Object.freeze(["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
 export const DEFAULT_GEMINI_LITE_MODELS = Object.freeze(["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]);
 
 const unique = (values) => [...new Set((Array.isArray(values) ? values : []).map((v) => String(v || "").trim()).filter(Boolean))];
@@ -302,15 +302,22 @@ export function geminiModelConfig(env = {}) {
   return { primary, deep, extra, lite, vision };
 }
 
-/* Models for one request, best first. Careful readings use the full models only. Everything that
+/* Models for one request, best first. Careful readings use the full models only (a whole-sheet reading adds the light
+   ones at the very end). Everything that
    speaks as a character uses the full models only too (a lite model would change the voice). Light
    utility work (the same short list that goes to Groq first) uses the lite buckets first, so the
    full models' daily quota is left for the writing. */
+export const SHEET_READING_SOURCES = Object.freeze(["character-bible", "sheet-summary"]);
 export function geminiModelLadder(config, body) {
   const source = String(body?.source || "").trim().toLowerCase();
   const deep = String(body?.quality || "") === "deep";
   const light = !deep && isGroqUtilitySource(source);
-  const list = deep
+  /* Reading a whole sheet once (the digest every later reply leans on) must not stay undone just because the full
+     models are overloaded: the light models, which take as long a text, come after all of them. */
+  const sheetReading = deep && SHEET_READING_SOURCES.includes(source);
+  const list = sheetReading
+    ? [config.deep, config.primary, ...config.extra, ...config.lite]
+    : deep
     ? [config.deep, config.primary, ...config.extra]
     : light
       ? [...config.lite, config.primary, ...config.extra]

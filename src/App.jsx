@@ -61732,8 +61732,9 @@ function voiceStyleCardsForIds(w, ids, actorId) {
     .slice(0, 8)
     .map((id) => charById(w, id))
     .filter((c) => c && !isHuman(w, c.id));
-  /* R23: the whole prefix stays around 14k characters however many people speak */
-  const perSpeaker = Math.min(5600, Math.floor(14500 / Math.max(1, speakers.length)));
+  /* R23: the whole prefix stays around 22k characters however many people speak; one speaker (a DM) gets up to 12k, so
+     the digest of their whole sheet fits next to their voice card instead of its first few lines. */
+  const perSpeaker = Math.min(12000, Math.floor(22000 / Math.max(1, speakers.length)));
   /* CLAUDE FIX R47: when one person is speaking (actorId), only THEY get their private
      sheet; everyone else in the prompt is shown by their public profile. */
   const soloActor = actorId && charById(w, actorId) && !isHuman(w, actorId) ? String(actorId) : "";
@@ -61748,8 +61749,8 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       }
       const persona = characterPersonaBrief(c);
       const rawStyle = characterVoiceStyleCard(c);
-      const style = rawStyle.slice(0, speakers.length > 4 ? 1200 : 2200);
-      const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : 1200) : "";
+      const style = rawStyle.slice(0, speakers.length > 4 ? 1200 : (speakers.length > 2 ? 1600 : 2200));
+      const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : (speakers.length > 2 ? 800 : 1200)) : "";
       const room = Math.max(500, perSpeaker - style.length - personaBlock.length - 10);
       let bible = "";
       try { bible = characterBibleCard(w, c, room); } catch (error) { bible = ""; }
