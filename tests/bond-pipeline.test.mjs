@@ -54,8 +54,7 @@ const bondsFor = ({ owner, roster, objectiveFacts }, witness = null) => ({
   }),
 });
 
-async function start({ delay = 0, concurrency, failures, witness = null, mentions = {} } = {}) {
-  const store = new Map();
+async function start({ delay = 0, concurrency, failures, witness = null, mentions = {}, store = new Map(), hang = false } = {}) {
   const calls = [];
   const payloads = [];
   let clockNow = 1_000_000;
@@ -69,6 +68,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
     try {
       await sleep(delay);
+      if (hang) await new Promise(() => {});
       const failure = failures?.(calls.length);
       if (failure) throw Object.assign(new Error(failure.message), { failures: failure.failures });
       const result = stage === "profile" ? profileFor(payload, mentions) : bondsFor(payload, witness);
@@ -78,6 +78,8 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
   };
   const pool = {
     query: async (sql, params) => {
+      // The server's own sweep for readings that are still pending (nobody has to ask for them).
+      if (/data->>'pending'/.test(sql)) return { rows: [...store].filter(([, data]) => data.pending === true).map(([key, data]) => ({ cache_key: key, data: JSON.parse(JSON.stringify(data)) })) };
       if (/^\s*SELECT/i.test(sql)) return { rows: params[0].filter((key) => store.has(key)).map((key) => ({ cache_key: key, data: JSON.parse(JSON.stringify(store.get(key))) })) };
       store.set(params[0], JSON.parse(params[1]));
       return { rows: [] };
@@ -85,7 +87,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
   };
   const app = express();
   app.use(express.json({ limit: "20mb" }));
-  registerBondAnalysis(app, {
+  const handle = registerBondAnalysis(app, {
     pool, requireDb: async () => true, getSessionIdentity: async () => ({ worldCode: "W1" }),
     stringifyJsonbSafe: (data) => JSON.stringify(data), analyze, clock: () => clockNow,
     env: concurrency ? { BOND_ANALYSIS_CONCURRENCY: String(concurrency) } : {},
@@ -106,7 +108,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
     return data;
   };
   return {
-    store, calls, payloads, bodies, post, api, advance: (ms) => { clockNow += ms; },
+    store, calls, payloads, bodies, post, api, advance: (ms) => { clockNow += ms; }, resume: handle.resumePending,
     maxInFlight: () => maxInFlight, reset: () => { calls.length = 0; bodies.length = 0; payloads.length = 0; },
     rebuild: (chars, options = {}) => rebuildBondGraph({ chars }, { subjects, api, language: "hu", pollMs: 5, ...options }),
     close: () => new Promise((resolve) => server.close(resolve)),
@@ -508,5 +510,49 @@ test("Changing only a nickname changes who a mention resolves to, so the pair is
     const reread = sim.payloads.find((row) => row.stage === "baseline" && row.payload.owner === "brent");
     assert.ok(reread, "the pair Brent -> Angela is read again, because 'Angel' no longer names her");
     assert.deepEqual(reread.payload.profile.mentions.map((row) => row.targetId), [null]);
+  } finally { await sim.close(); }
+});
+
+test("A reading whose round failed is retried by the server itself, with nobody polling", async () => {
+  const sim = await start({ failures: (n) => (n === 1 ? rateLimited : null) });
+  try {
+    assert.equal((await sim.post(profileRequest())).status, 202);
+    await until(() => [...sim.store.values()].some((row) => row.retryAt), "failure to be recorded");
+    assert.equal(await sim.resume(), 0, "still cooling down: nothing is started early");
+    assert.equal(sim.calls.length, 1);
+    sim.advance(61000);
+    assert.equal(await sim.resume(), 1, "the retry time has come: the server starts it");
+    await until(() => [...sim.store.values()].some((row) => row.result), "the retry to succeed without any poll");
+    assert.equal(sim.calls.length, 2);
+    assert.equal(await sim.resume(), 0, "a finished reading is not started again");
+  } finally { await sim.close(); }
+});
+
+test("After a server restart the reading that was in flight is picked up again without the app", async () => {
+  const store = new Map();
+  const before = await start({ store, hang: true });
+  try {
+    assert.equal((await before.post(profileRequest())).status, 202);
+    await until(() => before.calls.length === 1, "the first run to start");
+    const [row] = [...store.values()];
+    assert.equal(row.pending, true);
+    assert.ok(row.request, "the request is kept so the server can run it again");
+  } finally { await before.close(); }
+  const after = await start({ store });
+  try {
+    assert.equal(await after.resume(), 1, "the new process finds the pending reading");
+    await until(() => [...store.values()].some((row) => row.result), "the reading to finish");
+    assert.equal(after.calls.length, 1);
+    assert.equal(await after.resume(), 0);
+  } finally { await after.close(); }
+});
+
+test("The server does not start a reading again while it is already running it", async () => {
+  const sim = await start({ delay: 40 });
+  try {
+    assert.equal((await sim.post(profileRequest())).status, 202);
+    assert.equal(await sim.resume(), 0);
+    await until(() => [...sim.store.values()].some((row) => row.result), "the reading to finish");
+    assert.equal(sim.calls.length, 1);
   } finally { await sim.close(); }
 });

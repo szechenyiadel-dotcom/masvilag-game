@@ -659,7 +659,8 @@ test("When every pair rests, the analysis fails as 'transient' so the job waits 
 });
 
 test("proxy.js hands the shared ledger to the sheet analysis", () => {
-  assert.match(serverSource, /registerBondAnalysis\(app, \{[^}]*ledger: GEMINI_LEDGER \}\)/);
+  assert.match(serverSource, /registerBondAnalysis\(app, \{[^}]*ledger: GEMINI_LEDGER[,} ]/);
+  assert.match(serverSource, /resumeEveryMs: process\.env\.BOND_ANALYSIS_RESUME_MS/, "the server carries a reading on without the app");
 });
 
 /* ---------- when one Gemini model is overloaded or spent, sheet analysis moves to the next model ---------- */
