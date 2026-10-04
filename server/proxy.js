@@ -5198,7 +5198,7 @@ function providerModel(provider, body = {}) {
     return "cognitivecomputations/dolphin3.0-mistral-24b:free";
   }
   if (provider === "openrouter-dm-venice") {
-    return "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
+    return "cognitivecomputations/dolphin-mistral-24b-venice-edition";
   }
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
