@@ -317,7 +317,10 @@ export function validateBonds(result, owner, roster, ownSheet, factsByTarget, kn
     const sentences = value => [...new Intl.Segmenter("hu", { granularity: "sentence" }).segment(value)].filter(row => row.segment.trim()).length;
     const supported = bond.evidence.length > 0 || bond.factEvidence.length > 0;
     const descriptionCount = sentences(bond.description), publicCount = sentences(bond.publicFace), summaryCount = sentences(bond.summary);
-    if (descriptionCount < (supported ? 3 : 1) || descriptionCount > (supported ? 8 : 2) || publicCount < 1 || publicCount > 3 || summaryCount < (supported ? 2 : 1) || summaryCount > 4) throw new Error("Bond " + bond.from + "->" + bond.to + " prose sentence counts: description=" + descriptionCount + " (required " + (supported ? "3-8" : "1-2") + "), publicFace=" + publicCount + " (required 1-3), summary=" + summaryCount + " (required " + (supported ? "2-4" : "1-4") + "). Regenerate this bond with the required number of complete sentences, preserving supported meaning; regenerate the entire bonds array.");
+    /* The prompt still asks for richer 3-5 sentence descriptions and 2-3 sentence summaries. Do not throw away an
+       otherwise valid relationship and spend another AI call merely because the model expressed the same supported
+       meaning in one fewer/more sentence. Word floors below still prevent labels or empty filler. */
+    if (descriptionCount < 1 || descriptionCount > 8 || publicCount < 1 || publicCount > 3 || summaryCount < 1 || summaryCount > 4) throw new Error("Bond " + bond.from + "->" + bond.to + " prose sentence counts: description=" + descriptionCount + " (required 1-8), publicFace=" + publicCount + " (required 1-3), summary=" + summaryCount + " (required 1-4).");
     // Shorter is fine, but never empty and never a bare word or label: every shown text field carries real sentences.
     if (!bond.description.trim() || !bond.summary.trim() || !bond.publicFace.trim() || !bond.type.trim()) throw new Error("Empty bond description");
     const words = (value) => String(value).trim().split(/\s+/).filter(Boolean).length;

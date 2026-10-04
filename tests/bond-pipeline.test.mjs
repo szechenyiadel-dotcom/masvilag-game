@@ -644,7 +644,7 @@ const requestBodies = (chars) => {
   };
 };
 
-test("A profile is read with little thinking and fast preflight; relationship reading keeps full thinking", async () => {
+test("Connections analysis keeps low/medium thinking and uses fast capacity preflight in both stages", async () => {
   const sim = await start();
   try {
     await sim.rebuild([person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")]);
@@ -653,8 +653,8 @@ test("A profile is read with little thinking and fast preflight; relationship re
     assert.ok(profiles.every((call) => call.thinking === "LOW"));
     assert.ok(profiles.every((call) => call.fastCapacityCheck === true));
     assert.ok(profiles.every((call) => call.outputTokens >= 6000 && call.outputTokens <= 18000));
-    assert.ok(baselines.every((call) => call.thinking === "HIGH"));
-    assert.ok(baselines.every((call) => call.fastCapacityCheck === false));
+    assert.ok(baselines.every((call) => call.thinking === "MEDIUM"));
+    assert.ok(baselines.every((call) => call.fastCapacityCheck === true));
     assert.ok(baselines.every((call) => call.outputTokens >= 8000 && call.outputTokens <= 32000));
   } finally { await sim.close(); }
 });

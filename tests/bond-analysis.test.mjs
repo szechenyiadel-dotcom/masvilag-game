@@ -617,7 +617,7 @@ test("Sheet analysis skips a (key, model) pair the server already knows is spent
   const ledger = createGeminiLedger();
   ledger.fail("k1", "m1", { status: 429, payload: quotaError().payload });
   const calls = [];
-  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), {
+  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, {
     candidates: [gem("k1", "m1"), gem("k2", "m1")], transport: geminiTransport(calls, () => okReply), outputTokens: 1000, ledger,
   });
   assert.equal(result.keySlot, "K_k2");
@@ -627,7 +627,7 @@ test("Sheet analysis skips a (key, model) pair the server already knows is spent
 test("A quota error during sheet analysis is reported, so chat and pictures stop using that pair too", async () => {
   const ledger = createGeminiLedger();
   const calls = [];
-  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), {
+  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, {
     candidates: [gem("k1", "m1"), gem("k2", "m1")], transport: geminiTransport(calls, ({ key }) => { if (key === "k1") throw quotaError(); return okReply; }), outputTokens: 1000, ledger,
   });
   assert.equal(result.keySlot, "K_k2");
@@ -641,7 +641,7 @@ test("An answer that arrives but does not validate says nothing about the key: i
   const calls = [];
   const bad = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{}" }] } }] };
   for (let round = 0; round < 3; round += 1) {
-    await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), {
+    await analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, {
       candidates: [gem("k1", "m1"), gem("k2", "m1")], transport: geminiTransport(calls, ({ key }) => (key === "k1" ? bad : okReply)), outputTokens: 1000, ledger,
     });
   }
@@ -666,7 +666,7 @@ test("proxy.js hands the shared ledger to the sheet analysis", () => {
 /* ---------- when one Gemini model is overloaded or spent, sheet analysis moves to the next model ---------- */
 
 const modelOfUrl = (url) => decodeURIComponent(url.split("/models/")[1].split(":")[0]);
-function ladderRun({ env = {}, answer, ledger = null, validate = (value) => assert.equal(value.ok, true) }) {
+function ladderRun({ env = {}, answer, ledger = null, validate = (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); } }) {
   const attempted = [], bodies = [];
   const transport = async (url, opts) => {
     if (url.endsWith(":countTokens")) return { totalTokens: 100 };
@@ -718,7 +718,7 @@ test("With no Gemini model configured there is still nothing to try, however man
 test("Normalising a malformed answer uses the light Gemini models first, with a low thinking level", async () => {
   const out = await ladderRun({
     env: { GROQ_API_KEY: "gk", GROQ_MODEL: "groq-m" },
-    validate: (value) => assert.equal(value.ok, true),
+    validate: (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); },
     answer: ({ model }) => ({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: model === "pro-x" ? '{"ok":false}' : '{"ok":true}' }] } }] }),
   });
   assert.equal(out.result.model, "pro-x", "the reading is still credited to the model that did it");
@@ -762,7 +762,7 @@ test("A short reading may not hang for ten minutes on one model: four minutes, t
     if (url.endsWith(":generateContent")) return ok;
     return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
   };
-  await analyzeStructured("short source", { type: "object" }, (value) => assert.equal(value.ok, true), { env: { GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x" }, transport, outputTokens: 1000 });
+  await analyzeStructured("short source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { env: { GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x" }, transport, outputTokens: 1000 });
   assert.deepEqual(seen.map((row) => [row.kind, row.timeoutMs]), [["meta", 60000], ["count", 60000], ["generate", 240000]]);
 });
 
@@ -814,7 +814,7 @@ test("When the plain Flash models are overloaded the light models on the 4 light
     }
     return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
   };
-  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { env: sevenKeys(), transport, outputTokens: 1000, ledger: createGeminiLedger() });
+  const result = await analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { env: sevenKeys(), transport, outputTokens: 1000, ledger: createGeminiLedger() });
   assert.equal(result.model, "gemini-3.5-flash-lite");
   assert.equal(result.keySlot, "GEMINI_API_KEY_5");
   assert.deepEqual(attempted, ["3.8-flash@k2", "3.5-flash@k2", "3.7-flash@k2", "3.6-flash@k2", "3.5-flash-lite@k5"], "each busy model was asked once, then the first light key answered");
@@ -852,9 +852,10 @@ test("A compact supported bond (3 sentences) is accepted: shorter descriptions a
   checkBond(supportedBond());
 });
 
-test("A supported description needs at least 3 sentences and enough words to be real sentences", () => {
-  assert.throws(() => checkBond(supportedBond({ description: "Anna Bélával jár edzeni, így hetente többször találkoznak. A lap ennél többet nem mond." })), /prose sentence counts/);
-  assert.throws(() => checkBond(supportedBond({ description: "Edz. Jár. Együtt." })), /description is too short|prose sentence counts/);
+test("Sentence count alone never triggers a retry; meaningful text is still required", () => {
+  checkBond(supportedBond({ description: "Anna Bélával jár edzeni, így hetente többször találkoznak. A lap ennél többet nem mond." }));
+  checkBond(supportedBond({ summary: "Anna rendszeresen edz Bélával és ezért közös hétköznapjaik vannak." }));
+  assert.throws(() => checkBond(supportedBond({ description: "Edz. Jár. Együtt." })), /description is too short/);
 });
 
 test("Never one word and never empty: summary, description, publicFace and type", () => {
@@ -892,11 +893,33 @@ test("The paid repair is asked once per reading, however many models give an ans
     return { choices: [{ finish_reason: "stop", message: { content: '{"ok":false}' } }] };
   };
   try {
-    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { env, transport, outputTokens: 1000 }), /No analysis provider completed/);
+    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { env, transport, outputTokens: 1000 }), /No analysis provider completed/);
   } finally { console.warn = warn; }
   assert.equal(openaiCalls, 2, "one paid repair, plus the one paid semantic reading itself");
   assert.ok(logged.some((line) => /^\[bond-analysis-invalid\] gemini\/gemini-3\.8-flash \[GEMINI_API_KEY_2\] /.test(line)), "what the model got wrong is visible at once: " + logged.slice(0, 2).join(" | "));
   assert.ok(logged.every((line) => !/\bk[2-8]\b|oa\b/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
+});
+
+test("A semantic validation failure skips schema repair and moves straight to the next semantic candidate", async () => {
+  const semantic = [gem("a", "first"), gem("b", "second")];
+  const repairs = [gem("r", "repair")];
+  const asked = [];
+  const transport = async (url, opts) => {
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) {
+      const model = modelOfUrl(url); asked.push(model);
+      return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":true}' }] } }] };
+    }
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  let seen = 0;
+  const validate = () => {
+    seen += 1;
+    if (seen === 1) throw new Error('facts[0]: evidence is not a verbatim source quote: "x"');
+  };
+  const result = await analyzeStructured("Complete source", { type: "object" }, validate, { candidates: semantic, schemaCandidates: repairs, transport, outputTokens: 1000 });
+  assert.equal(result.model, "second");
+  assert.deepEqual(asked, ["first", "second"], "semantic failure did not spend a repair call");
 });
 
 /* ---------- an unbacked subjective field becomes null instead of failing the whole reading ---------- */
@@ -947,7 +970,7 @@ test("A repair stops after two answers that still do not validate, instead of wa
   };
   const warn = console.warn; console.warn = () => {};
   try {
-    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000 }), /No analysis provider completed/);
+    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000 }), /No analysis provider completed/);
   } finally { console.warn = warn; }
   assert.deepEqual(asked, ["full@s", "lite-a@k1", "lite-a@k2"], "one reading, two repairs, then it gives up");
 });
@@ -967,7 +990,7 @@ test("A repair never asks more than eight times, even when the providers keep fa
   };
   const warn = console.warn; console.warn = () => {};
   try {
-    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000 }), /No analysis provider completed/);
+    await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000 }), /No analysis provider completed/);
   } finally { console.warn = warn; }
   assert.equal(asked.length, 1 + 8, "the reading plus at most eight repair attempts");
 });
@@ -990,7 +1013,7 @@ test("A repair model that Google no longer offers (404) is asked once, not on ev
   const warn = console.warn; console.warn = () => {};
   let result;
   try {
-    result = await analyzeStructured("Complete source", { type: "object" }, (value) => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000, ledger });
+    result = await analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { candidates: [semantic], schemaCandidates: repairs, transport, outputTokens: 1000, ledger });
   } finally { console.warn = warn; }
   assert.equal(result.formatterModel, "good-model");
   assert.deepEqual(asked, ["full@s", "gone-model@k1", "good-model@k1"], "the gone model was asked on one key only");
