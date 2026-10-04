@@ -5623,7 +5623,7 @@ function providerAllowedForBody(provider, body) {
    - DM: Dolphin3.0 on OPENROUTER_API_KEY -> Venice Uncensored :free on OPENROUTER_API_KEY_2 -> Mistral 1 -> Mistral 2.
    - Scene: Mistral Small 1 -> Mistral Small 2.
    - Gemini-owned feed / character knowledge: Gemini -> Nemotron :free on OPENROUTER_API_KEY -> OpenAI.
-   - Comments/replies: Mistral Small 1 -> Mistral Small 2 when the player is waiting; background comments keep the free writing chain.
+   - Comments/replies (player waiting or background): Gemini -> Groq 1 -> Groq 2 -> OpenRouter 1 -> OpenRouter 2.
    - Nemotron is reserved for the Gemini fallback chain only.
    - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
    - Analysis, classification and translation (meaning-analysis, display-translate, music-note,
@@ -5658,8 +5658,9 @@ function taskProviderOrder(requestedProvider, body) {
     /* Scenes use Mistral Small, with the second Mistral key as fallback. */
     raw = ["mistral", "mistral2"];
   } else if (isComment) {
-    /* Nemotron is reserved for Gemini fallback, so foreground comments use only the Mistral pair. */
-    raw = playerWaiting ? ["mistral", "mistral2"] : [...FREE_WRITING_CHAIN];
+    /* Comments — the ones the player waits for and the background ones alike — use the free writing chain:
+       Gemini -> Groq 1 -> Groq 2 -> OpenRouter 1 -> OpenRouter 2. */
+    raw = [...FREE_WRITING_CHAIN];
   } else if (isFeed) {
     /* Gemini first, then free Nemotron on OpenRouter key 1, paid OpenAI last. */
     raw = ["gemini", "openrouter3", "openai"];
