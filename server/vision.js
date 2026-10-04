@@ -21,6 +21,20 @@ export const GROQ_VISION_MAX_WAIT_MS = 15000;
 export const GEMINI_VISION_MAX_ATTEMPTS = 6;   /* calls to Gemini for ONE picture, however many keys and models exist */
 const GROQ_VISION_DISABLED_MS = 60 * 60 * 1000;
 const GROQ_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
+const GROQ_MODEL_LIST_CACHE_MS = 10 * 60 * 1000;
+const GROQ_DISCOVERY_MAX_TRIES = 3;
+/* Model ids that can take images on Groq (Llama 4 is multimodal), and ids that are never chat models. */
+export const GROQ_VISION_LIKE = /llama-4|scout|maverick|vision|(?:^|[-_/.])vl(?:[-_/.]|$)|multimodal|pixtral|llava|gemma-?3|omni/i;
+const GROQ_NOT_CHAT = /whisper|tts|guard|embed|playai|orpheus|distil|compound|transcri|speech/i;
+export function groqVisionRank(id) {
+  const v = String(id || "").toLowerCase();
+  if (/llama-4-scout/.test(v)) return 0;
+  if (/llama-4-maverick/.test(v)) return 1;
+  if (/llama-4/.test(v)) return 2;
+  if (/llama.*vision/.test(v)) return 3;
+  if (/vision|multimodal|(?:^|[-_/.])vl(?:[-_/.]|$)/.test(v)) return 4;
+  return 5;
+}
 /* Errors that say the MODEL is the problem (gone, no access, cannot take images), not this picture. */
 const MODEL_PROBLEM = /model[^.]*(?:not found|does not exist|do not have access|decommission|deprecated|not supported|unavailable)|(?:does not|doesn't) support (?:image|vision)|not (?:a )?(?:vision|multimodal)|(?:image|vision) (?:input )?is not supported|content[^.]*must be a string/i;
 
@@ -33,25 +47,41 @@ export function createVisionRunner({
   const groqRestUntil = new Map();
   let groqDisabledUntil = 0;
   let discovered = { model: "", at: 0 };
+  /* "slot|model" pairs that answered "this model is unusable" — skipped for a while, per key,
+     because one key may have access to a model the other does not. */
+  const badModelUntil = new Map();
+  let modelList = { ids: [], at: 0 };
 
-  /* If the configured model is gone or cannot see images, look for a current vision-capable one. */
-  async function discoverGroqModel(key) {
-    if (discovered.model && now() - discovered.at < GROQ_MODEL_CACHE_MS) return discovered.model;
+  /* Groq's own list of models this key can use (cached for 10 minutes). */
+  async function listGroqModels(key) {
+    if (modelList.ids.length && now() - modelList.at < GROQ_MODEL_LIST_CACHE_MS) return modelList.ids;
     try {
       const response = await fetchFn("https://api.groq.com/openai/v1/models", { method: "GET", headers: { Authorization: `Bearer ${key}` }, timeoutMs: 10000 });
+      if (!response.ok) return [];
       const payload = await response.json().catch(() => ({}));
-      const ids = (Array.isArray(payload?.data) ? payload.data : []).filter((row) => row && row.active !== false).map((row) => String(row.id || ""));
-      const found = ids.find((id) => /llama-4-scout/i.test(id)) || ids.find((id) => /llama-4-maverick/i.test(id)) || ids.find((id) => /vision/i.test(id)) || "";
-      if (found) discovered = { model: found, at: now() };
-      return found;
+      const ids = (Array.isArray(payload?.data) ? payload.data : []).filter((row) => row && row.active !== false).map((row) => String(row.id || "")).filter(Boolean);
+      if (ids.length) modelList = { ids, at: now() };
+      return ids;
     } catch (error) {
-      return "";
+      return [];
     }
+  }
+
+  /* If the configured model is gone or cannot see images, find the current vision-capable ones:
+     Llama 4 (Scout, then Maverick) first, then any other Llama vision / multimodal model. */
+  async function discoverGroqModels(key, slot, exclude) {
+    const ids = await listGroqModels(key);
+    return ids
+      .filter((id) => GROQ_VISION_LIKE.test(id) && !GROQ_NOT_CHAT.test(id) && !exclude.has(id) && (badModelUntil.get(slot + "|" + id) || 0) <= now())
+      .sort((a, b) => groqVisionRank(a) - groqVisionRank(b) || a.localeCompare(b))
+      .slice(0, GROQ_DISCOVERY_MAX_TRIES);
   }
 
   async function viaGroq(image, prompt, note) {
     if (now() < groqDisabledUntil) { note("groq", 0, "vision model unavailable, waiting for the next hour"); return null; }
     if (image.base64.length > GROQ_VISION_MAX_BASE64) { note("groq", 413, "image is over Groq's 4 MB limit"); return null; }
+    let keysTried = 0;
+    let keysWithOnlyModelProblems = 0;
     for (const { slot, key } of groqKeys) {
       if ((groqRestUntil.get(slot) || 0) > now()) { note(slot, 429, "resting"); continue; }
       /* Shares the key's one-request-at-a-time turn and minute budget with the chat traffic. */
@@ -61,10 +91,28 @@ export function createVisionRunner({
         if (!grant.ok) { note(slot, 429, `busy (${grant.reason})`, Math.max(3000, grant.waitMs || 0)); continue; }
         lease = grant;
       }
+      keysTried += 1;
       let usedTokens;
+      let modelProblem = false;
+      let otherOutcome = false;
       try {
-        let model = discovered.model || groqModel;
-        for (let tryNumber = 0; tryNumber < 2; tryNumber += 1) {
+        const remembered = discovered.model && now() - discovered.at < GROQ_MODEL_CACHE_MS ? discovered.model : "";
+        const queue = [remembered, groqModel].filter((m, i, a) => m && a.indexOf(m) === i && (badModelUntil.get(slot + "|" + m) || 0) <= now());
+        const tried = new Set();
+        let searched = false;
+        while (tried.size < GROQ_DISCOVERY_MAX_TRIES + 2) {
+          if (!queue.length) {
+            if (searched) break;
+            searched = true;
+            const found = await discoverGroqModels(key, slot, tried);
+            if (!found.length) break;
+            log.warn?.(`[vision] ${slot}: looking for a working vision model — trying ${found.join(", ")}`);
+            queue.push(...found);
+            continue;
+          }
+          const model = queue.shift();
+          if (tried.has(model)) continue;
+          tried.add(model);
           let response, payload;
           try {
             response = await fetchFn("https://api.groq.com/openai/v1/chat/completions", {
@@ -79,14 +127,21 @@ export function createVisionRunner({
             payload = await response.json().catch(() => ({}));
           } catch (error) {
             note(slot, 504, error?.message || "request failed");
+            otherOutcome = true;
             break;
           }
           if (response.ok) {
             const reported = Number(payload?.usage?.total_tokens);
             if (Number.isFinite(reported) && reported >= 0) usedTokens = reported;
             const text = String(payload?.choices?.[0]?.message?.content || "").trim();
-            if (text) return { ok: true, text, provider: slot, model };
+            if (text) {
+              /* a working model other than the configured one is remembered for both keys */
+              if (model !== groqModel && discovered.model !== model) log.warn?.(`[vision] groq vision now uses ${model} (set GROQ_VISION_MODEL=${model} to make it the default)`);
+              if (model !== groqModel) discovered = { model, at: now() };
+              return { ok: true, text, provider: slot, model };
+            }
             note(slot, 502, "empty description");
+            otherOutcome = true;
             break;
           }
           const text = message(payload, `HTTP ${response.status}`);
@@ -94,25 +149,31 @@ export function createVisionRunner({
           if (response.status === 429) {
             const wait = Math.max(15000, groqRetryMs(response.headers?.get?.("retry-after"), text) || 60000);
             groqRestUntil.set(slot, now() + Math.min(wait, 6 * 3600 * 1000));
+            otherOutcome = true;
             break;
           }
-          if ([401, 403].includes(response.status)) { groqRestUntil.set(slot, now() + 24 * 3600 * 1000); break; }
+          if ([401, 403].includes(response.status) && !MODEL_PROBLEM.test(text)) { groqRestUntil.set(slot, now() + 24 * 3600 * 1000); otherOutcome = true; break; }
           if (response.status === 413) return null;
-          if ([400, 404, 422].includes(response.status) && MODEL_PROBLEM.test(text)) {
-            /* The model is gone or cannot read images: try a discovered one once, otherwise stand down for an hour. */
-            if (tryNumber === 0) {
-              const other = await discoverGroqModel(key);
-              if (other && other !== model) { log.warn?.(`[vision] groq model ${model} unusable (${text.slice(0, 120)}); trying ${other}`); model = other; continue; }
-            }
-            groqDisabledUntil = now() + GROQ_VISION_DISABLED_MS;
-            log.warn?.(`[vision] groq vision disabled for an hour: ${text.slice(0, 160)} (set GROQ_VISION_MODEL to a current vision model)`);
-            return null;
+          if ([400, 403, 404, 422].includes(response.status) && MODEL_PROBLEM.test(text)) {
+            /* This model is gone / not allowed / cannot read images on this key: remember that, try the
+               next candidate (a discovered current vision model) with the SAME picture. */
+            badModelUntil.set(slot + "|" + model, now() + GROQ_MODEL_CACHE_MS);
+            if (discovered.model === model) discovered = { model: "", at: 0 };
+            modelProblem = true;
+            continue;
           }
+          otherOutcome = true;
           break;
         }
       } finally {
         if (lease) lease.release(usedTokens);
       }
+      if (modelProblem && !otherOutcome) keysWithOnlyModelProblems += 1;
+    }
+    /* Only when EVERY key that was asked found no usable vision model does Groq stand down. */
+    if (keysTried > 0 && keysWithOnlyModelProblems === keysTried) {
+      groqDisabledUntil = now() + GROQ_VISION_DISABLED_MS;
+      log.warn?.(`[vision] groq vision disabled for an hour: no vision-capable Groq model is available to any key (set GROQ_VISION_MODEL to a current vision model)`);
     }
     return null;
   }
