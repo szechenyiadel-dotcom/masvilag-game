@@ -54,7 +54,7 @@ const bondsFor = ({ owner, roster, objectiveFacts }, witness = null) => ({
   }),
 });
 
-async function start({ delay = 0, concurrency, failures, witness = null, mentions = {}, store = new Map(), hang = false } = {}) {
+async function start({ delay = 0, concurrency, failures, witness = null, mentions = {}, store = new Map(), hang = false, decorate = null } = {}) {
   const calls = [];
   const payloads = [];
   let clockNow = 1_000_000;
@@ -72,6 +72,7 @@ async function start({ delay = 0, concurrency, failures, witness = null, mention
       const failure = failures?.(calls.length);
       if (failure) throw Object.assign(new Error(failure.message), { failures: failure.failures });
       const result = stage === "profile" ? profileFor(payload, mentions) : bondsFor(payload, witness);
+      decorate?.(result, stage);
       validate(result);
       return { result, provider: "mock", model: "mock", keySlot: "MOCK", inputTokens: 1 };
     } finally { inFlight -= 1; }
@@ -554,5 +555,19 @@ test("The server does not start a reading again while it is already running it",
     assert.equal(await sim.resume(), 0);
     await until(() => [...sim.store.values()].some((row) => row.result), "the reading to finish");
     assert.equal(sim.calls.length, 1);
+  } finally { await sim.close(); }
+});
+
+test("A model that fills dynamics and wants without a quote no longer sinks the reading: they come back null, in one call", async () => {
+  const sim = await start({ decorate: (result, stage) => { if (stage === "baseline") for (const bond of result.bonds) Object.assign(bond, { dynamics: "Kitalált dinamika.", wants: "Kitalált vágy.", hiddenFeelings: "Kitalált érzés." }); } });
+  try {
+    const chars = [person("a", "Cobra Kai tag."), person("b", "Cobra Kai tag.")];
+    const result = await sim.rebuild(chars);
+    assert.equal(sim.calls.filter((call) => call.stage === "baseline").length, 2, "one model call per sheet, no retry rounds");
+    for (const bond of Object.values(result.baselines)) {
+      assert.equal(bond.dynamics, null); assert.equal(bond.wants, null); assert.equal(bond.hiddenFeelings, null);
+      assert.ok(bond.description && bond.summary && bond.publicFace, "the shown texts stay filled");
+    }
+    assert.ok(![...sim.store.values()].some((row) => row.error), "no failed round was recorded");
   } finally { await sim.close(); }
 });

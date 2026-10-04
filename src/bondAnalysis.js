@@ -231,6 +231,25 @@ export function reconcileFacts(from, to, profiles, groupIndex) {
   return output;
 }
 
+/* The subjective fields (hidden feelings, dynamics, wants, shared history) may only stay filled when the answer backs
+   them with an own-sheet quote; otherwise the rule is "null". A model that fills one without a quote used to make the
+   whole reading fail and start over (minutes per round, a paid repair call each time). The rule is now applied as
+   it is written: the unbacked field becomes null, everything else is checked as strictly as before (quotes must
+   still be verbatim). Works in place; leaves anything that is not shaped like a bond to the schema check. */
+export function sanitizeBonds(result) {
+  if (!result || !Array.isArray(result.bonds)) return result;
+  for (const bond of result.bonds) {
+    if (!bond || typeof bond !== "object") continue;
+    const backed = (field) => Array.isArray(bond.fieldEvidence) && bond.fieldEvidence.some((row) => row && row.field === field && Array.isArray(row.quotes) && row.quotes.length > 0);
+    for (const field of ["hiddenFeelings", "dynamics", "wants"]) {
+      if (typeof bond[field] === "string" && !backed(field)) bond[field] = null;
+    }
+    const proven = (Array.isArray(bond.evidence) && bond.evidence.length > 0) || (Array.isArray(bond.factEvidence) && bond.factEvidence.length > 0);
+    if (typeof bond.history === "string" && !proven) bond.history = null;
+  }
+  return result;
+}
+
 // roster: exactly the targets this answer must cover (one bond each).
 // knownIds: every character of the world. A secret may be known to anyone, not only
 // to the people in this slice of targets, so witnesses are checked against the cast.
