@@ -596,3 +596,12 @@ test("A daily limit of ZERO means the model has no free quota at all: it rests o
   assert.deepEqual([unknown.limit, unknown.limitKnown], [0, false]);
   assert.equal(createGeminiLedger({ now: () => now }).fail("k", "m", { status: 429, payload: { error: { details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } } }).level, "model");
 });
+
+
+test("Active app language is authoritative across every generated user-visible AI surface", () => {
+  const social = fs.readFileSync(new URL("../src/socialWorldPolicy.js", import.meta.url), "utf8");
+  assert.match(social, /ACTIVE APP LANGUAGE — HARD CONTRACT/);
+  assert.match(social, /If the active language is English: DMs, Scenes, posts, captions, Notes, comments, replies, group-chat lines, gossip, notifications, summaries, relationship prose/);
+  assert.match(social, /Do NOT switch languages merely because the newest player message/);
+  assert.match(social, /const combinedPolicy = `\$\{ACTIVE_LANGUAGE_POLICY\}/);
+});
