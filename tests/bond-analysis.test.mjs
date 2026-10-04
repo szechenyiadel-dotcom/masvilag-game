@@ -556,7 +556,7 @@ test("Quote check ignores layout only: spacing, typographic quotes and dashes, n
  assert.throws(() => quoted(42));
 });
 
-test("All 20 sheets complete when Gemini quota runs out after 16: OpenAI reads the rest, each with the whole sheet", async () => {
+test("All 20 sheets complete when Gemini quota runs out after 16 and Groq is rate-limited: OpenAI reads the rest, each with the whole sheet", async () => {
  const env = {
   GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "free", GEMINI_API_KEY: "paid",
   OPENAI_API_KEY: "openai", OPENAI_ANALYSIS_MODEL: "configured-openai",
@@ -572,6 +572,7 @@ test("All 20 sheets complete when Gemini quota runs out after 16: OpenAI reads t
   }
   if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
   hosts.add(new URL(url).host);
+  if (url.includes("api.groq.com")) throw Object.assign(new Error("rate limited"), { status: 429 });
   const body = JSON.parse(options.body);
   fallbackPrompts.push(body.messages[0].content);
   return response({ sheet: body.messages[0].content });
@@ -585,7 +586,7 @@ test("All 20 sheets complete when Gemini quota runs out after 16: OpenAI reads t
  assert.deepEqual(completed.slice(16).map(row => row.keySlot), Array(4).fill("OPENAI_API_KEY"));
  assert.equal(fallbackPrompts.length, 4);
  assert.ok(fallbackPrompts.every(value => value.endsWith("END") && value.length > 39000));
- assert.deepEqual([...hosts], ["api.openai.com"], "Groq is never asked");
+ assert.deepEqual([...hosts].sort(), ["api.groq.com", "api.openai.com"], "Groq is asked before OpenAI");
 });
 
 test("An incomplete OpenAI answer is never accepted", async () => {
@@ -593,9 +594,30 @@ test("An incomplete OpenAI answer is never accepted", async () => {
  await assert.rejects(analyzeStructured("full sheet ".repeat(6000), { type: "object" }, () => {}, { candidates: [candidates[1]], transport }), /Incomplete OpenAI analysis: length/);
 });
 
-test("A sheet reading never reaches Groq, whatever Groq keys exist", () => {
- const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
- for (const mode of ["semantic", "profile", "schema"]) assert.ok(providerCandidates(config, mode).every(candidate => candidate.name === "gemini" || candidate.name === "openai"), mode);
+test("A sheet reading goes Gemini -> Groq 1 -> Groq 2 -> Nemotron -> OpenAI; schema repair stays on Gemini and OpenAI", () => {
+ const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", OPENROUTER_API_KEY: "or", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
+ for (const mode of ["semantic", "profile"]) {
+  const rows = providerCandidates(config, mode);
+  const firstOther = rows.findIndex(c => c.name !== "gemini");
+  assert.ok(firstOther > 0 && rows.slice(0, firstOther).every(c => c.name === "gemini"), mode + ": Gemini first");
+  const tail = rows.slice(firstOther).map(c => c.name + ":" + c.keySlot);
+  assert.deepEqual(tail, ["groq:GROQ_API_KEY", "groq:GROQ_API_KEY_2", "openrouter:OPENROUTER_API_KEY", "openai:OPENAI_API_KEY"], mode);
+  assert.equal(rows[firstOther].model, "groq-a");
+  assert.equal(rows[firstOther + 2].model, "nvidia/nemotron-x:free");
+ }
+ assert.ok(providerCandidates(config, "schema").every(candidate => candidate.name === "gemini" || candidate.name === "openai"), "schema");
+ assert.ok(providerCandidates({ ...config, BOND_ANALYSIS_FREE_COMPAT: "off" }, "semantic").every(c => c.name === "gemini" || c.name === "openai"), "switch");
+});
+
+test("Groq/Nemotron readers get the schema in the prompt, a JSON answer, and a capped output", async () => {
+ const sent = [];
+ const transport = async (url, options) => { sent.push({ url, body: JSON.parse(options.body) }); return { choices: [{ finish_reason: "stop", message: { content: "```json\n{\"ok\":true}\n```" } }] }; };
+ const candidates = [{ name: "groq", model: "groq-a", key: "gk", keySlot: "GROQ_API_KEY", url: "https://api.groq.com/openai/v1/chat/completions", maxOutput: 8192 }];
+ const result = await analyzeStructured("READ THIS", { type: "object", properties: { ok: { type: "boolean" } } }, value => assert.equal(value.ok, true), { candidates, transport });
+ assert.equal(result.provider, "groq");
+ assert.equal(sent[0].body.max_tokens, 8192);
+ assert.deepEqual(sent[0].body.response_format, { type: "json_object" });
+ assert.match(sent[0].body.messages[0].content, /READ THIS[\s\S]*JSON SCHEMA/);
 });
 
 /* ---------- sheet analysis shares the server's view of resting Gemini keys ---------- */
