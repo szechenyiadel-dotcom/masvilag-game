@@ -15,10 +15,11 @@ const TRANSIENT_STATUSES = [408, 429, 500, 502, 503, 504, 529];
 const isTransient = (error) => error?.transient ?? TRANSIENT_STATUSES.includes(error?.status);
 
 async function request(url, options = {}) {
+  const { timeoutMs, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 600000);
+  const timer = setTimeout(() => controller.abort(), Number(timeoutMs) > 0 ? Number(timeoutMs) : 600000);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
     const data = await response.json();
     if (!response.ok) {
       const error = new Error("Analysis provider HTTP " + response.status + ": " + String(data.error?.message || data.message || "request failed"));
@@ -149,11 +150,12 @@ async function modelCapabilities(candidate, prompt, schema, transport) {
   if (candidate.name === "gemini") {
     const root = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model);
     const headers = { "x-goog-api-key": candidate.key, "Content-Type": "application/json" };
-    const meta = await transport(root, { headers });
+    const meta = await transport(root, { headers, timeoutMs: 60000 });
     if (!meta.supportedGenerationMethods?.includes("generateContent")) throw new Error("Configured Gemini model cannot generate content");
     const count = await transport(root + ":countTokens", {
       method: "POST",
       headers,
+      timeoutMs: 60000,
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt + "\nJSON SCHEMA:\n" + JSON.stringify(schema) }] }] }),
     });
     return {
@@ -210,10 +212,16 @@ function outputBudget(candidate, capability, requested) {
   return budget;
 }
 
+/* A reading of a few thousand characters (the Connections text) must not be allowed to hang for ten minutes on one
+   unresponsive model: the next one is tried after four. Long sheets keep the full ten. */
+export const generationTimeoutMs = (promptChars) => (Number(promptChars) <= 40000 ? 240000 : 600000);
+
 async function callStructuredCandidate(candidate, completePrompt, schema, outputTokens, transport, mode) {
+  const timeoutMs = generationTimeoutMs(completePrompt.length);
   if (candidate.name === "gemini") {
     const data = await transport("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(candidate.model) + ":generateContent", {
       method: "POST",
+      timeoutMs,
       headers: { "Content-Type": "application/json", "x-goog-api-key": candidate.key },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: completePrompt }] }],
@@ -251,6 +259,7 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
 
   const data = await transport(endpoint, {
     method: "POST",
+    timeoutMs,
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + candidate.key },
     body: JSON.stringify(body),
   });
@@ -394,7 +403,7 @@ export async function analyzeStructured(prompt, schema, validate, options = {}) 
         /* What Google actually said, so "ran out" can be told apart from "has no free quota" and "overloaded". */
         if (outcome && outcome.restMs > 0) {
           console.warn("[bond-analysis-gemini]", candidate.model, candidate.keySlot, "HTTP " + error.status, outcome.level + (outcome.metric ? "/" + outcome.metric : ""),
-            outcome.limit !== undefined ? "limit=" + outcome.limit : "", outcome.quotaId || "", "rest=" + Math.round(outcome.restMs / 60000) + "min");
+            outcome.limit !== undefined ? "limit=" + (outcome.level === "model-no-free-quota" || outcome.limit > 0 ? outcome.limit : "?") : "", outcome.quotaId || "", "rest=" + Math.round(outcome.restMs / 60000) + "min");
         }
       }
       failures.push({
@@ -561,7 +570,9 @@ export function registerBondAnalysis(app, { pool, requireDb, getSessionIdentity,
     const work = async () => {
       try {
         console.info("[bond-analysis-input]", JSON.stringify({ stage, owner, sheetHash: hash, sourceChars: metadata.sourceChars, promptChars: prompt.length, targets: prepared.missing?.length }));
+        const startedAt = clock();
         const analyzed = await analyze(prompt, schema, validate, { outputTokens: 64000, semanticStartOffset: rotation++, deadline: clock() + deadlineMs, clock, ledger });
+        console.info("[bond-analysis-done]", stage, owner, analyzed.provider + "/" + analyzed.model, "[" + analyzed.keySlot + "]", analyzed.formatterModel ? "formatted by " + analyzed.formatterModel : "", "ms=" + (clock() - startedAt));
         if (stage === "baseline") {
           await Promise.all(analyzed.result.bonds.map((bond) => {
             const index = prepared.cards.findIndex((card) => card.id === bond.to);

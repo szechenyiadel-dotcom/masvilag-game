@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { createRequire } from "node:module";
 import { buildGroupIndex, deriveFromGroups, reconcileFacts, resolveProfileReferences, validateProfile, validateBonds, runtimeBond, restoreBaselineGraph, assertCompleteGraph, ProfileSchema } from "../src/bondAnalysis.js";
 import { fullSheetText, relationshipSourceText, relationshipFields, rebuildBondGraph, installBondGraph, analysisReady, bondGenerationContext, bondSourceFingerprint } from "../src/bondClient.js";
-import { sheetHash, analyzeStructured } from "../server/bondAnalysis.js";
+import { sheetHash, analyzeStructured, generationTimeoutMs } from "../server/bondAnalysis.js";
 import { createGeminiLedger } from "../server/aiPolicy.js";
 const require = createRequire(import.meta.url);
 const { parse } = require("@babel/parser");
@@ -764,4 +764,19 @@ test("A model with no free quota (limit 0) is asked once, not on every key, and 
     assert.ok(logged.some((line) => /\[bond-analysis-gemini\] pro-x GEMINI_API_KEY_2 HTTP 429 model-no-free-quota\/per-day limit=0 GenerateRequestsPerDay/.test(line)), logged.join(" | "));
     assert.ok(!logged.some((line) => /g2|g3/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
   } finally { console.warn = original; }
+});
+
+test("A short reading may not hang for ten minutes on one model: four minutes, then the next model; long sheets keep ten", async () => {
+  assert.equal(generationTimeoutMs(6652), 240000);
+  assert.equal(generationTimeoutMs(40000), 240000);
+  assert.equal(generationTimeoutMs(40001), 600000);
+  const seen = [];
+  const transport = async (url, opts) => {
+    seen.push({ kind: url.endsWith(":generateContent") ? "generate" : url.endsWith(":countTokens") ? "count" : "meta", timeoutMs: opts.timeoutMs });
+    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
+    if (url.endsWith(":generateContent")) return ok;
+    return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
+  };
+  await analyzeStructured("short source", { type: "object" }, (value) => assert.equal(value.ok, true), { env: { GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x" }, transport, outputTokens: 1000 });
+  assert.deepEqual(seen.map((row) => [row.kind, row.timeoutMs]), [["meta", 60000], ["count", 60000], ["generate", 240000]]);
 });
