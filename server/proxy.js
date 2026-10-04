@@ -5348,8 +5348,15 @@ function preservePromptEdges(text, max) {
       const tail = Math.max(0, usable - head);
       return block.slice(0, head) + note + (tail ? block.slice(-tail) : "");
     };
-    const keptFidelity = compactBlock(fidelityBlock, Math.floor(max * 0.60), "character fidelity");
-    const keptTail = compactBlock(protectedTail, Math.floor(max * 0.32), "latest protected tail");
+    /* What the reply depends on is the protected tail (the last turns of this very conversation, the voice card, the
+       rules, the player's latest line): it stays whole while it fits in 55% of the room, and only what lies beyond is
+       compacted. Cutting it at a third of the room used to drop the newest turns from the middle, and the character then
+       answered a line it had no context for. The character canon gets what is left, up to 60%, and the rest of the
+       prompt keeps at least 8%. */
+    const tailCap = protectedTail ? Math.min(protectedTail.length, Math.floor(max * 0.55)) : 0;
+    const fidelityCap = Math.min(Math.floor(max * 0.60), Math.max(0, max - tailCap - Math.floor(max * 0.08)));
+    const keptFidelity = compactBlock(fidelityBlock, fidelityCap, "character fidelity");
+    const keptTail = compactBlock(protectedTail, Math.max(tailCap, Math.floor(max * 0.32)), "latest protected tail");
 
     let body = value;
     if (fidelityBlock) body = body.slice(0, fidelityAt) + body.slice(fidelityEnd);

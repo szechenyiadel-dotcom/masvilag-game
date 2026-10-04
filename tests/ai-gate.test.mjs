@@ -709,3 +709,31 @@ test("Gemini: an overloaded model is skipped on the other keys at once and the n
   assert.equal(result.model, "gemini-3.7-flash");
   assert.deepEqual(requests.map((r) => r.model), ["gemini-3.8-flash", "gemini-3.7-flash"], "the second key was not asked about the busy model");
 });
+
+/* ---------- a DM reply keeps the conversation it answers, even when the prompt is cut for a paid provider ---------- */
+
+const dmBody = () => {
+  const history = Array.from({ length: 14 }, (_, i) => (i % 2 ? "Tandy: " : "Brent: ") + "H" + String(i + 1).padStart(2, "0") + " " + "talk ".repeat(70)).join("\n");
+  const tail = "\n\n[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]\nPROTECTED DIRECT-DM CONTEXT — NEVER OMIT THIS BLOCK.\n\nVOICE / WRITING-STYLE CARD:\n" + "voice ".repeat(300) +
+    "\n\nLATEST 14 MESSAGES FROM THIS EXACT DM, BOTH SIDES, VERBATIM:\n" + history + "\n\nYOUR LAST 5 OWN DM MESSAGES:\n" + "own ".repeat(300) +
+    "\n\nMANDATORY RESPONSE BEHAVIOR:\n" + "- rule ".repeat(600) + "\nAMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\nyeah I'm here... \"boyfriend\"";
+  const canon = "[[CHARACTER_FIDELITY]]\n" + "canon ".repeat(5000) + "\n[[/CHARACTER_FIDELITY]]";
+  return {
+    source: "dm",
+    system: "SYS ".repeat(10000) + canon,
+    messages: [{ role: "user", content: "CTX ".repeat(40000) + tail }],
+    max_tokens: 650,
+  };
+};
+
+test("A paid DM request keeps all 14 turns of the conversation, the rules and the player's newest line", async () => {
+  const { context, sent } = groqPath();
+  const result = await context.proxyCompatibleMessage("mistral2", "key", "m", "https://api.mistral.ai/x", dmBody());
+  assert.equal(result.ok, true);
+  const message = sent[0].messages.map((row) => row.content).join("\n");
+  for (let i = 1; i <= 14; i += 1) assert.ok(message.includes("H" + String(i).padStart(2, "0") + " "), "turn " + i + " of the conversation is still there");
+  assert.ok(message.includes("MANDATORY RESPONSE BEHAVIOR"), "the rules are still there");
+  assert.ok(message.endsWith('yeah I\'m here... "boyfriend"'), "and the player's newest line is the very last thing");
+  assert.ok(message.includes("VOICE / WRITING-STYLE CARD"), "with the voice card");
+  assert.ok(textLength(sent[0]) <= 61000, "all of it still within the paid ceiling");
+});
