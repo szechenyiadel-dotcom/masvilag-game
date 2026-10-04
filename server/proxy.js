@@ -5636,13 +5636,11 @@ function providerAllowedForBody(provider, body) {
 }
 
 /* Provider roles are intentionally strict.
-   - DM: Dolphin3.0 on OPENROUTER_API_KEY -> Venice Uncensored :free on OPENROUTER_API_KEY_2 -> Mistral 1 -> Mistral 2.
-   - Scene: Mistral Small 1 -> Mistral Small 2.
-   - Feed: Gemini -> Nemotron :free -> openrouter/free (keys 1, 2) -> Groq 1, 2 (when it fits) -> OpenAI.
-   - Character knowledge: Gemini -> Nemotron :free on OPENROUTER_API_KEY -> OpenAI.
-   - Comments/replies (player waiting or background): free OpenRouter (key 1, key 2, Nemotron) -> free Gemini -> OpenAI (paid) -> Venice on OpenRouter key 2 (paid).
-   - Nemotron is reserved for the Gemini fallback chain only.
-   - Existing character voice/style cards remain prompt context; there is no separate AI voice pass.
+   - DM: Dolphin on OPENROUTER_API_KEY -> Venice on OPENROUTER_API_KEY_2 (paid) -> Mistral 1 -> Mistral 2.
+   - Scene: Dolphin -> Venice (paid) -> Mistral 1 -> Mistral 2.
+   - Comments (player waiting or background): Dolphin -> Nemotron :free -> free Gemini -> OpenAI (paid) -> Venice (paid).
+   - Feed: Gemini -> Nemotron :free -> Dolphin -> Groq 1, 2 (when it fits) -> OpenAI.
+   - Character knowledge: Gemini -> Groq 1, 2 (when it fits) -> Nemotron :free -> OpenAI.
    - Analysis, classification and translation (meaning-analysis, display-translate, music-note,
      relationship-impact) go to Groq first when Groq can take the whole request, then free Gemini.
    - Other small background tasks keep the existing Gemini/Groq routing. */
@@ -5672,20 +5670,18 @@ function taskProviderOrder(requestedProvider, body) {
     /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
     raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (source === "scene") {
-    /* Scenes use Mistral Small, with the second Mistral key as fallback. */
-    raw = ["mistral", "mistral2"];
+    /* Scenes: Dolphin (OpenRouter key 1) -> Venice (OpenRouter key 2, paid) -> Mistral 1 -> Mistral 2. */
+    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (isComment) {
-    /* Comments — the ones the player waits for and the background ones alike: the free OpenRouter models
-       (openrouter/free on key 1, key 2's model, Nemotron :free), then the free Gemini keys, then paid OpenAI,
-       then paid OpenRouter (Venice on key 2). */
-    raw = ["openrouter", "openrouter2", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
+    /* Comments — the ones the player waits for and the background ones alike: Dolphin (OpenRouter key 1) ->
+       Nemotron :free -> the free Gemini keys -> paid OpenAI -> paid Venice (OpenRouter key 2). */
+    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
   } else if (isFeed) {
-    /* Gemini first, then free Nemotron on OpenRouter key 1, then the other free models (openrouter/free on
-       OpenRouter keys 1 and 2, Groq 1 and 2 when the request fits them), paid OpenAI last. */
-    raw = ["gemini", "openrouter3", "openrouter", "openrouter2", "groq", "groq2", "openai"];
+    /* Feed: Gemini -> Nemotron :free -> Dolphin -> Groq 1 -> Groq 2 (when the request fits them) -> paid OpenAI. */
+    raw = ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
-    /* Canon/identity knowledge uses the same Gemini -> Nemotron -> OpenAI fallback chain. */
-    raw = ["gemini", "openrouter3", "openai"];
+    /* Canon/identity knowledge: Gemini -> Groq 1 -> Groq 2 (when it fits) -> Nemotron -> OpenAI. */
+    raw = ["gemini", "groq", "groq2", "openrouter3", "openai"];
   } else if (isGroqUtilitySource(source)) {
     /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A

@@ -36,14 +36,31 @@ async function request(url, options = {}) {
   } finally { clearTimeout(timer); }
 }
 
+/* Free OpenAI-compatible readers after the Gemini keys: Groq 1, Groq 2, then Nemotron :free on OpenRouter key 1.
+   BOND_ANALYSIS_FREE_COMPAT=off switches them off. An answer that does not validate simply hands the reading on. */
+const COMPAT_ANALYSIS_URLS = Object.freeze({
+  groq: "https://api.groq.com/openai/v1/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+});
+function freeCompatCandidates(env) {
+  if (/^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_FREE_COMPAT || "").trim())) return [];
+  const out = [];
+  const groqModel = String(env.GROQ_ANALYSIS_MODEL || env.GROQ_MODEL || "openai/gpt-oss-120b").trim();
+  const groqOutput = Number(env.GROQ_ANALYSIS_OUTPUT_LIMIT) > 0 ? Number(env.GROQ_ANALYSIS_OUTPUT_LIMIT) : 8192;
+  if (env.GROQ_API_KEY) out.push({ name: "groq", model: groqModel, key: env.GROQ_API_KEY, keySlot: "GROQ_API_KEY", url: COMPAT_ANALYSIS_URLS.groq, maxOutput: groqOutput });
+  if (env.GROQ_API_KEY_2 && env.GROQ_API_KEY_2 !== env.GROQ_API_KEY) out.push({ name: "groq", model: groqModel, key: env.GROQ_API_KEY_2, keySlot: "GROQ_API_KEY_2", url: COMPAT_ANALYSIS_URLS.groq, maxOutput: groqOutput });
+  if (env.OPENROUTER_API_KEY) out.push({ name: "openrouter", model: String(env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim(), key: env.OPENROUTER_API_KEY, keySlot: "OPENROUTER_API_KEY", url: COMPAT_ANALYSIS_URLS.openrouter, maxOutput: 32000 });
+  return out;
+}
+
 function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
 // Sheet analysis is background work: it uses the free Gemini keys first. OpenAI is its one paid last resort (the
 // owner chose it for this job): it is asked only after every free candidate has failed, and BOND_ANALYSIS_OPENAI=off
-// switches it off. The paid Gemini key stays opt-in (AI_ALLOW_PAID_BACKGROUND=1). Groq is not used here: its free
-// tier cannot carry a whole sheet, and its answers failed the verbatim-quote check.
+// switches it off. The paid Gemini key stays opt-in (AI_ALLOW_PAID_BACKGROUND=1). Groq 1, Groq 2 and Nemotron :free
+// sit between Gemini and OpenAI (owner's order); what they cannot carry or get wrong simply moves on.
 const allowPaid = (env) => String(env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
 const openaiFallback = (env) => Boolean(env.OPENAI_API_KEY) && !/^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_OPENAI || "").trim());
 
@@ -149,6 +166,8 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
     ? [[lite, groups.lite], [lite, groups.flash], [flash, groups.flash], [flash, groups.lite], [flash, groups.paid]]
     : [[flash, groups.flash], [lite, groups.lite], [flash, groups.lite], [lite, groups.flash], [flash, groups.paid]];
   candidates.push(...geminiCandidates(env, modelGroups));
+  /* The owner's order for a reading: Gemini -> Groq 1 -> Groq 2 -> Nemotron -> OpenAI. */
+  candidates.push(...freeCompatCandidates(env));
 
   if (openaiFallback(env)) {
     candidates.push({
@@ -214,7 +233,7 @@ async function modelCapabilities(candidate, prompt, schema, transport, { fastCap
     };
   }
 
-  if (candidate.name === "openai") {
+  if (candidate.name === "openai" || candidate.name === "groq" || candidate.name === "openrouter") {
     return {
       contextWindow: null,
       outputLimit: null,
@@ -266,6 +285,23 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
       .filter((part) => !part.thought)
       .map((part) => part.text || "")
       .join("");
+  }
+
+  if (candidate.name === "groq" || candidate.name === "openrouter") {
+    const data = await transport(candidate.url, {
+      method: "POST",
+      timeoutMs: Math.min(timeoutMs, 180000),
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + candidate.key },
+      body: JSON.stringify({
+        model: candidate.model,
+        messages: [{ role: "user", content: completePrompt + "\n\nReturn ONLY one JSON object that matches this JSON SCHEMA:\n" + JSON.stringify(schema) }],
+        response_format: { type: "json_object" },
+        max_tokens: Math.min(Number(outputTokens) || 8192, Number(candidate.maxOutput) || 8192),
+      }),
+    });
+    const choice = data.choices?.[0];
+    if (choice?.finish_reason !== "stop") throw new Error("Incomplete " + candidate.name + " analysis: " + (choice?.finish_reason || "no choice"));
+    return String(choice.message?.content || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   }
 
   if (candidate.name !== "openai") throw new Error("Unknown analysis provider: " + candidate.name);
