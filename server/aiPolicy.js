@@ -452,6 +452,30 @@ export function requestExpectsJson(body) {
   return /valid JSON|érvényes JSON|JSON only|csak JSON|return json/i.test(String(body?.system || "") + " " + lastText.slice(-4000));
 }
 
+/* R80: a single-line comment request ({"reply": "..."} / {"comment": "..."}) answered as plain prose
+   ("Language: en\n\n\"Nice try...\"") is wrapped into the one-field JSON the prompt asked for, instead of
+   throwing a usable line away. Only for a prompt whose answer schema is that single text field. */
+export function salvageSingleFieldJson(body, text) {
+  const answer = String(text || "").trim();
+  if (!answer || answer.length > 700 || answer.includes("{")) return "";
+  const rows = Array.isArray(body?.messages) ? body.messages : [];
+  const last = rows.length ? rows[rows.length - 1] : null;
+  const lastText = typeof last?.content === "string" ? last.content : Array.isArray(last?.content) ? last.content.map((p) => p?.text || "").join(" ") : "";
+  const tail = lastText.slice(-6000);
+  const schema = tail.match(/\{\s*(?:\\?"language\\?"\s*:\s*\\?"[a-z]{2}\\?"\s*,\s*)?\\?"(reply|comment|text)\\?"\s*:\s*\\?"[^"\\{}]{0,80}\\?"\s*(?:,\s*\\?"language\\?"\s*:\s*\\?"[a-z]{2}\\?"\s*)?\}/);
+  if (!schema) return "";
+  const lang = (answer.match(/^\s*language\s*:\s*([a-z]{2})\b/i) || [])[1] || ((tail.match(/"language"\s*:\s*"([a-z]{2})"/) || [])[1]) || "";
+  let line = answer
+    .replace(/^\s*language\s*:\s*[a-z]{2}\s*/i, "")
+    .replace(/^\s*(?:reply|comment|text|answer)\s*:\s*/i, "")
+    .trim();
+  line = line.replace(/^["“”'‘’]+|["“”'‘’]+$/g, "").trim();
+  if (!line || line.length < 2 || /\n\s*\n/.test(line)) return "";
+  const out = { [schema[1]]: line };
+  if (lang) out.language = lang.toLowerCase();
+  return JSON.stringify(out);
+}
+
 const REFUSAL_START = /^["'“”‘’\s]*(?:i['’]?m sorry|i am sorry|sorry[,.! ]|i apologi[sz]e|i['’]?m afraid|i can(?:['’]t|not)|i could(?:n['’]t| not)|i['’]?m (?:unable|not able)|i am (?:unable|not able)|i won['’]?t|i will not|i must (?:decline|refuse)|as an ai|unfortunately,? i|sajn[aá]lom|nem tudok|nem seg[ií]thetek|nem fogok|elnézést,? de)/i;
 const REFUSAL_TOPIC = /assist|help|comply|fulfil|continue|generat|writ|provid|creat|content|request|explicit|sexual|policy|guideline|appropriate|seg[ií]t|teljes[ií]t|folytat|tartalom|k[ée]r[ée]s|szab[aá]ly|ir[aá]nyelv|nem megfelel/i;
 

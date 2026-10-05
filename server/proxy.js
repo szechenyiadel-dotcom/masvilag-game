@@ -24,6 +24,7 @@ import {
   geminiBlockReason,
   looksLikeRefusal,
   requestExpectsJson,
+  salvageSingleFieldJson,
   PAID_INPUT_PROVIDERS,
   paidMaxInputChars,
   paidCeilingFor,
@@ -5926,8 +5927,17 @@ async function executeAITask(task) {
        sentence) is no answer either: the next provider tries. A cut-off or slightly broken object still
        counts as an answer, the app repairs those. */
     if (askedForJson && !refusedByText) {
-      const answered = String(answerText(result) || "");
-      const brace = answered.indexOf("{");
+      let answered = String(answerText(result) || "");
+      let brace = answered.indexOf("{");
+      if ((brace === -1 || !/"[^"\n]{1,60}"\s*:/.test(answered.slice(brace))) && /(?:^|[-_])comments?(?:[-_]|$)|player-post-comment/.test(kindOfRequest)) {
+        const salvaged = salvageSingleFieldJson(task.body, answered);
+        if (salvaged) {
+          console.info("[ai-gate] prose-wrapped-as-json", `source=${task.source}`, `provider=${provider}/${model}`, salvaged.slice(0, 160));
+          result.payload = { ...(result.payload || {}), content: [{ type: "text", text: salvaged }] };
+          answered = salvaged;
+          brace = 0;
+        }
+      }
       if (brace === -1 || !/"[^"\n]{1,60}"\s*:/.test(answered.slice(brace))) {
         console.warn("[ai-gate] no-json-answer", `source=${task.source}`, `provider=${provider}/${model}`, `chars=${answered.length}`, "start=" + JSON.stringify(answered.slice(0, 160)), "— handing the request to the next provider");
         attempts.push({ provider, model, status: 422, message: "answer held no JSON" });
