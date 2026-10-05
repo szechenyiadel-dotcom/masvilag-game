@@ -15611,6 +15611,48 @@ function directAddressAliasesForCharacter(c) {
  * We only repair VOCATIVES (opening/trailing direct address), never ordinary
  * third-person mentions in the middle of a sentence.
  */
+/* R88: names and pet names that the speaker's OWN sheet gives to someone other than the target */
+const HUSH_PET_NAMES = ["babydoll", "baby doll", "dollface", "doll", "princess", "kitten", "kitty", "angel", "darling", "sweetheart", "sweetie",
+  "honey", "sugar", "cupcake", "bunny", "bambi", "cutie", "shortcake", "firecracker", "pretty girl", "little one", "mouse", "pet", "bug",
+  "trouble", "sunshine", "baby girl", "good girl", "babe", "baby", "love", "beautiful", "gorgeous", "drágám", "cicám", "babám", "szívem", "kicsim", "hercegnőm"];
+const SHEET_FOREIGN_NAME_CACHE = new Map();
+function sheetForeignNamesFor(actor, target) {
+  if (!actor || !target) return [];
+  const sheet = Object.entries(actor)
+    .filter(([k, v]) => typeof v === "string" && v.length < 400000 && !/^(?:id|avatar|image|cover|username|name|nick|nickname)$/i.test(k) && !/^data:/.test(v))
+    .map(([, v]) => v).join("\n");
+  if (!sheet) return [];
+  const targetNames = [target.name, target.nick, target.nickname, target.username, String(target.name || "").split(/\s+/)[0]]
+    .map((x) => String(x || "").trim()).filter((x) => x.length >= 3);
+  const key = String(actor.id) + ">" + String(target.id) + ":" + sheet.length + ":" + targetNames.join("|");
+  if (SHEET_FOREIGN_NAME_CACHE.has(key)) return SHEET_FOREIGN_NAME_CACHE.get(key);
+  const lowSheet = sheet.toLowerCase();
+  const nearTarget = (index) => {
+    const around = lowSheet.slice(Math.max(0, index - 90), index + 90);
+    return targetNames.some((n) => around.includes(n.toLowerCase()));
+  };
+  const out = [];
+  HUSH_PET_NAMES.forEach((pet) => {
+    const re = new RegExp("(?<![\\p{L}])" + pet.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\p{L}])", "giu");
+    let m, seen = false, ownedByTarget = false;
+    while ((m = re.exec(sheet))) { seen = true; if (nearTarget(m.index)) { ownedByTarget = true; break; } }
+    /* only a pet name the sheet ties to someone else (never near the target's name) */
+    if (seen && !ownedByTarget) out.push(pet);
+  });
+  /* a capitalised pet-name-like nickname used as somebody's name mid-sentence ("…his ex, Babydoll, …") */
+  const capRe = /(?:^|[a-z,;:()"“'’\-–—]\s+|["“'‘])((?:Baby ?doll|Dollface|Princess|Kitten|Bambi|Angel|Sugar|Cupcake|Bunny|Kitty)[a-z]*)/g;
+  let c;
+  while ((c = capRe.exec(sheet))) {
+    const name = c[1];
+    if (!out.some((x) => x.toLowerCase() === name.toLowerCase()) && !nearTarget(c.index)) out.push(name);
+  }
+  /* the generic endearments stay usable for the target (babe / baby / love); only the distinctive ones are owned */
+  const result = out.filter((x) => !/^(?:babe|baby|love|beautiful|gorgeous|honey|darling|sweetheart|sweetie)$/i.test(x));
+  SHEET_FOREIGN_NAME_CACHE.set(key, result);
+  if (SHEET_FOREIGN_NAME_CACHE.size > 400) SHEET_FOREIGN_NAME_CACHE.delete(SHEET_FOREIGN_NAME_CACHE.keys().next().value);
+  return result;
+}
+
 function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
   let text = String(value || "");
   if (!text || !w || !actorId || !targetId || actorId === targetId) return text;
@@ -15664,6 +15706,17 @@ function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
       addForeign(x.name, 3);
     });
   } catch (error) { /* the character bible is optional */ }
+  /* R88: read the speaker's raw sheet too — a pet name written next to another person ("calls Lily babydoll",
+     "Babydoll — his ex") belongs to that person even when the bible did not list it */
+  try {
+    sheetForeignNamesFor(actor, target).forEach((name) => {
+      const low = name.toLowerCase();
+      if (targetAliases.has(low) || actorAliases.has(low)) return;
+      if (wrongAliases.some((x) => x.toLowerCase() === low)) return;
+      wrongAliases.push(name);
+      sheetForeignAliases.push(name);
+    });
+  } catch (error) { /* sheet text is optional */ }
 
   sheetForeignAliases.forEach((alias) => {
     const escaped = regexEscapeLiteral(alias);
@@ -15674,6 +15727,11 @@ function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
     text = text.replace(
       new RegExp(`,\\s*(?:my\\s+)?(?:${escaped})\\s*,`, "gi"),
       replacement ? `, ${replacement},` : ","
+    );
+    /* R88: "Keep laughing, babydoll. Makes it…" / "…without me, babydoll? You know…" — a vocative before any sentence end */
+    text = text.replace(
+      new RegExp(`,\\s*(?:my\\s+)?(?:${escaped})(?=\\s*(?:[.!?…]|$))`, "gi"),
+      replacement ? `, ${replacement}` : ""
     );
   });
 
@@ -28160,9 +28218,12 @@ const COMMENT_DM_REQUEST_RE = /\b(?:dm me|text me|message me|msg me|hit me up|sl
 const COMMENT_DM_PROMISE_RE = /\b(?:i'?ll (?:dm|text|message|msg) (?:you|u)|(?:dm|text|message)(?:ing)? (?:you|u) (?:later|tonight|now|in a (?:sec|bit|min))|check (?:your|ur) (?:dms?|messages|inbox|phone)|sliding into (?:your|ur) dms?|i'?ll hit (?:you|u) up|dms? (?:in )?a sec)\b|(?:(?:^|\s)[ií]rok (?:neked|priv[aá]tban|dm-?ben|majd|r[aá]d)|\bmajd [ií]rok\b|n[eé]zd (?:a|meg a) (?:dm|[uü]zeneteid)|k[uü]ld[oö]k (?:egy )?(?:[uü]zit|[uü]zenetet|dm-?et))/i;
 
 function enqueueCommentAgreedDm(w, botId, info) {
-  if (!w || !botId || !w.meId || isHuman(w, botId) || isMediaAccount(w, botId) || !charById(w, botId)) return false;
-  const en = worldLanguage(w, w.meId) === "en";
-  const player = nameOfIn(w, w.meId), bot = nameOfIn(w, botId);
+  /* R90: the saved world inside update() has no meId (only the live view does) — this silently stopped every
+     "text me" DM. The caller passes the player's id. */
+  const meId = (w && w.meId) || (info && info.playerId) || "";
+  if (!w || !botId || !meId || isHuman(w, botId) || isMediaAccount(w, botId) || !charById(w, botId)) return false;
+  const en = worldLanguage(w, meId) === "en";
+  const player = nameOfIn(w, meId), bot = nameOfIn(w, botId);
   const cause = info.kind === "request"
     ? (en ? player + " asked you in the comments to message them: \"" + cut(info.playerText || "", 220) + "\" (under " + (info.postAuthorName || "a post") + "'s post). You are writing to them now because of that — pick up exactly that thread."
           : player + " a kommentekben megkért, hogy írj rá: \"" + cut(info.playerText || "", 220) + "\" (" + (info.postAuthorName || "egy") + " posztja alatt). Ezért írsz most — pontosan onnan folytasd.")
@@ -29930,7 +29991,7 @@ function legacyChannelApplyWorldStep(n, out) {
     const authorChar = charById(n, author);
     if (!authorChar) { feedPostDropLog(n, author, "unknown-author"); return; }
     if (!EVENT_DRIVEN_FEED_APPLYING && !characterCanAutonomouslyPost(n, authorChar)) return;
-    const postText = cleanGeneratedUtterance(n, author, p.text, 700);
+    const postText = cleanGeneratedUtterance(n, author, stripSocialRoleplayNarration(n, author, p.text), 700);
     if (!postText) { feedPostDropLog(n, author, "empty-or-filtered-text"); return; }
     if (socialSelfClassificationContradiction(n, author, postText)) { feedPostDropLog(n, author, "self-classification-contradiction"); return; }
 
@@ -29967,7 +30028,7 @@ function legacyChannelApplyWorldStep(n, out) {
     safePostComments(p).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
-      const body = cleanGeneratedUtterance(n, cid, c.text, 240);
+      const body = cleanGeneratedUtterance(n, cid, stripSocialRoleplayNarration(n, cid, c.text), 240);
       if (!body) return;
       if (socialSelfClassificationContradiction(n, cid, body)) return;
 
@@ -31395,7 +31456,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
               try {
                 if (COMMENT_DM_REQUEST_RE.test(String(made.text || ""))) {
                   const askedIds = [...new Set([...freshMentionTargets, targetId].filter((tid) => tid && tid !== freshActorId && !isHuman(n, tid)))].slice(0, 2);
-                  askedIds.forEach((botId) => enqueueCommentAgreedDm(n, botId, { kind: "request", commentId: made.id, playerText: made.text, postAuthorName: nameOfIn(n, x.authorId) }));
+                  askedIds.forEach((botId) => enqueueCommentAgreedDm(n, botId, { kind: "request", playerId: freshActorId, commentId: made.id, playerText: made.text, postAuthorName: nameOfIn(n, x.authorId) }));
                 }
               } catch (dmAskError) { console.warn("[comment-dm] request failed", dmAskError); }
               /* R53: whoever is into the player notices who the player gives attention to */
@@ -37499,6 +37560,9 @@ function directDmProtectedTail(w, c, ck, latestText) {
   const clarification = directDmClarificationBlock(w, c, ck, latest);
   let emotionTrigger = "";
   try { emotionTrigger = directDmEmotionTrigger(w, c, latest); } catch (error) { emotionTrigger = ""; }
+  /* R90: the fake-dating lane goes into the protected tail, the last thing the model reads */
+  let fakeDatingLane = "";
+  try { const card = fakeDatingBehaviorCard(w, c.id, w.meId); if (card) fakeDatingLane = "\n\nSTAY IN THIS LANE — " + card + "\n"; } catch (error) { fakeDatingLane = ""; }
 
   return "\n\n[MÁSVILÁG_DIRECT_DM_PROTECTED_TAIL_V1]\n" +
     "PROTECTED DIRECT-DM CONTEXT — NEVER OMIT THIS BLOCK.\n\n" +
@@ -37522,6 +37586,7 @@ function directDmProtectedTail(w, c, ck, latestText) {
     "- Keep the exact JSON response schema requested earlier in the prompt.\n\n" +
     clarification +
     emotionTrigger +
+    fakeDatingLane +
     "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
     latest;
 }
@@ -38282,11 +38347,14 @@ Formátum:
     , { maxTries: 1, maxTokens: 650, timeoutMs: 50000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }
     );
 
-    const requestedReplyText = String(
+    const requestedReplyRaw = String(
       out && out.reply !== undefined
         ? out.reply
         : ""
     ).trim();
+    /* R89: a DM reply is a text message — roleplay narration only when the player writes *roleplay* themselves */
+    const requestedReplyText = /\*[^*]+\*/.test(String(t || "")) ? requestedReplyRaw : stripSocialRoleplayNarration(w, c.id, requestedReplyRaw);
+    if (out && out.reply !== undefined && requestedReplyText !== requestedReplyRaw) out.reply = requestedReplyText;
 
     const explicitImageRequest =
       chatExplicitlyRequestsImage(t);
@@ -41341,7 +41409,7 @@ Ha van:
 - Plusz és mínusz egyformán lehetséges.
 - Egyoldalú belső érzésnél használhatsz "oneSided":true mezőt.
 
-{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${autonomousDmTriggerDirective(w, bot)}${TAIL}`,
+{"skip":false,"text":"a rövid privát üzenet vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"selfUpdates":[{"id":"${bot.id}","mood":"mi dolgozik benned most","intent":"mit akarsz most következőnek","openLoops":["nyitott saját ügy, ha van"]}],"relationshipUpdates":[{"id":"${bot.id}","targetId":"${w.meId}","currentFeeling":"kifejezetten iránta MOST élő érzés vagy üres","currentIntent":"mit akarsz VELE kapcsolatban következőnek vagy üres","lastTone":"a mostani DM tényleges hangneme","perceivedTargetMood":"csak ha a meglévő beszélgetésből van róla benyomásod, különben üres","addOpenLoops":["csak új, ténylegesen nyitva maradó kettőtök közti ügy"],"resolveOpenLoops":["csak most ténylegesen lezárt korábbi ügy"],"addPromises":["csak explicit ígéret"],"resolvePromises":["teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["teljesült/lemondott terv"]}]}${autonomousDmTriggerDirective(w, bot)}${(() => { try { const card = fakeDatingBehaviorCard(w, bot.id, w.meId); return card ? "\n\nSTAY IN THIS LANE — " + card : ""; } catch (error) { return ""; } })()}${TAIL}`,
     { memory: backgroundMemory(w, [bot.id]), maxTokens: 700, priority: 22 }
   );
 }
@@ -54996,7 +55064,7 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
           : [];
         /* R54: a comment under the player's post that promises a DM is kept */
         newAiComments.filter((c) => COMMENT_DM_PROMISE_RE.test(String(c.text || ""))).slice(0, 2)
-          .forEach((c) => enqueueCommentAgreedDm(n, c.authorId, { kind: "promise", commentId: c.id, botText: c.text, playerText: String(afterApplyPost && afterApplyPost.text || "") }));
+          .forEach((c) => enqueueCommentAgreedDm(n, c.authorId, { kind: "promise", playerId: afterApplyPost && isHuman(n, afterApplyPost.authorId) ? afterApplyPost.authorId : "", commentId: c.id, botText: c.text, playerText: String(afterApplyPost && afterApplyPost.text || "") }));
         const socialPairs = newAiComments.length ? playerPostSocialDynamicsPairs(n, afterApplyPost, newAiComments, combinedRows) : [];
         socialPairs.forEach((pair) => {
           const queued = simEnqueue(n, mkAction("reply", "player-post-social:" + post.id + ":" + pair.root.id + ":" + pair.responderId, {
@@ -56068,10 +56136,11 @@ if (action.type === "roleplay-initiate") {
       } finally { REPLY_DYNAMIC_APPLYING = ""; }
       /* R54: an AI reply that promises a DM to the player ("I'll text you", "írok privátban") is kept */
       try {
-        if (isHuman(n, comment.authorId) && n.meId === comment.authorId) {
+        /* R90: the saved world has no meId — the human comment author IS the player */
+        if (isHuman(n, comment.authorId) && (!n.meId || n.meId === comment.authorId)) {
           const livePost = (n.posts || []).find((row) => row && row.id === post.id);
           safePostComments(livePost).filter((c) => c && c.parent === comment.id && !isHuman(n, c.authorId) && COMMENT_DM_PROMISE_RE.test(String(c.text || ""))).slice(-2)
-            .forEach((c) => enqueueCommentAgreedDm(n, c.authorId, { kind: "promise", commentId: c.id, botText: c.text, playerText: comment.text }));
+            .forEach((c) => enqueueCommentAgreedDm(n, c.authorId, { kind: "promise", playerId: comment.authorId, commentId: c.id, botText: c.text, playerText: comment.text }));
         }
       } catch (dmPromiseError) { console.warn("[comment-dm] promise failed", dmPromiseError); }
       /* CLAUDE FIX R14: the social dynamic of an AI→AI reply moves their mutual relationship by rule. */
@@ -57134,8 +57203,9 @@ if (targetNote) {
       cleanGeneratedUtterance(
         view,
         bot.id,
+        /* R89: an unprompted DM is a text message, never roleplay narration */
         out && out.text
-          ? String(out.text).trim()
+          ? stripSocialRoleplayNarration(view, bot.id, String(out.text).trim())
           : "",
         280
       );
@@ -62952,11 +63022,35 @@ function generatedTextUnknownPersonName(w, text) {
   return "";
 }
 
+/* R89 (owner's rule): comments, posts and DMs are typed text — no roleplay narration, no *actions*,
+   no "Feng stares at the comment and smirks. \"Typical.\"". The spoken line is kept, the narration goes. */
+function stripSocialRoleplayNarration(w, id, value) {
+  const text = String(value || "").trim();
+  if (!text) return text;
+  const noActs = text.replace(/\*[^*\n]{1,400}\*/g, " ").replace(/\s{2,}/g, " ").trim();
+  const quoteRe = /["“„]([^"“”„]{2,700})["”]/g;
+  const quotes = [...noActs.matchAll(quoteRe)].map((m) => m[1].trim()).filter(Boolean);
+  const outside = noActs.replace(quoteRe, " ").replace(/\s+/g, " ").trim();
+  let first = "";
+  try { const speaker = charById(w, id); first = speaker ? String(speaker.name || "").trim().split(/\s+/)[0] : ""; } catch (error) { first = ""; }
+  const esc = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const narrationVerb = /\b(?:smirks?|grins?|stares?|scoffs?|snorts?|rolls? (?:his|her|their) eyes|leans?|shrugs?|laughs?|sighs?|chuckles?|smiles?|glares?|types?|replies|responds|says|mutters?|whispers?|raises? an eyebrow|shakes? (?:his|her|their) head)\b/i;
+  const narrationy = outside.length > 8 && (
+    (first && new RegExp("(?:^|[.!?]\\s*)" + esc(first) + "\\b", "i").test(outside)) ||
+    /\b(?:he|she|they)\s+[a-z]+(?:s|ed)\b/i.test(outside) ||
+    narrationVerb.test(outside)
+  );
+  if (quotes.length && narrationy) return quotes.join(" ");
+  if (!quotes.length && first && new RegExp("^" + esc(first) + "\\s+[a-z]+s\\b", "i").test(noActs) && narrationVerb.test(noActs)) return "";
+  return noActs;
+}
+
 function cleanGeneratedComment(...args) {
   const w = args[0];
   const id = args[1];
   args[2] = normalizeGeneratedSocialText(args[2]);
   if (!args[2]) return "";
+  try { args[2] = stripSocialRoleplayNarration(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try { args[2] = stripForeignGroupClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try { args[2] = stripUnfoundedPossessiveClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try {
@@ -64970,7 +65064,18 @@ function fakeDatingBehaviorCard(w, actorId, targetId) {
   const reverse = getRel(w, targetId, actorId) || EMPTY_REL;
   /* R87: the reading may put "fake dating" into the label / description / layers instead of the bond word */
   const saysFake = (r) => [r.bond, r.type, r.label, r.role, r.description, ...(Array.isArray(r.layers) ? r.layers : [])].filter(Boolean).some((v) => isFakeDatingText(v));
-  if (!saysFake(rel) && !(reverse.whoKnows?.includes(actorId) && saysFake(reverse))) return "";
+  /* R90: also the pair's official status and the speaker's OWN sheet ("fake dating Tandy") */
+  let pairFake = false;
+  try { pairFake = typeof explicitMutualStatus === "function" && explicitMutualStatus(w, actorId, targetId) === "fake-dating"; } catch (error) { pairFake = false; }
+  if (!pairFake) {
+    try {
+      const a = charById(w, actorId) || {}, t = charById(w, targetId) || {};
+      const names = [t.name, String(t.name || "").split(/\s+/)[0], t.nick, t.username].map((x) => String(x || "").trim().toLowerCase()).filter((x) => x.length >= 3);
+      const sheet = Object.values(a).filter((v) => typeof v === "string" && v.length < 400000 && !/^data:/.test(v)).join("\n");
+      pairFake = names.length > 0 && sheet.split(/(?<=[.!?\n])\s+/).some((sentence) => isFakeDatingText(sentence) && names.some((n) => sentence.toLowerCase().includes(n)));
+    } catch (error) { pairFake = false; }
+  }
+  if (!pairFake && !saysFake(rel) && !(reverse.whoKnows?.includes(actorId) && saysFake(reverse))) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
   const target = nameOfIn(w, targetId);
   const real = [rel.mood, rel.hidden].filter(Boolean).join("; ");
@@ -64980,10 +65085,10 @@ function fakeDatingBehaviorCard(w, actorId, targetId) {
   const guarded = /fuck ?boy|f\*ckboy|playboy|player\b|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
   return en
     ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. Never reveal publicly that it is fake." +
-      " In private (DMs, scenes with only the two of you) the real feelings" + (real ? " (" + real + ")" : "") + " only LEAK — a look held too long, jealousy you deny, staying longer than the deal needs, a softer moment you immediately joke away. Liking them or wanting them is fine to show; ADMITTING that you feel more, that it is not fake for you any more, does not happen in an ordinary DM: you deflect ('it's part of the act', 'don't flatter yourself', a joke, a flirt, a change of subject) and get colder if pressed." +
+      " In private (DMs, scenes with only the two of you) the real feelings" + (real ? " (" + real + ")" : "") + " only LEAK — a look held too long, jealousy you deny, staying longer than the deal needs, a softer moment you immediately joke away. Liking them or wanting them is fine to show; ADMITTING that you feel more, that it is not fake for you any more, does not happen in an ordinary DM: you deflect ('it's part of the act', 'don't flatter yourself', a joke, a flirt, a change of subject) and get colder if pressed. If they say you are good at faking it, you take the bait as a compliment or a challenge ('I'm good at everything') — you do NOT answer 'I'm not faking', 'I mean every word' or anything that says the feelings are real." +
       (guarded ? " You are the player / commitment-shy type: admitting real feelings is the LAST thing you would do — only after many significant moments, under real pressure (jealousy, almost losing them), and even then half-said and taken back." : "")
     : "ÁLKAPCSOLAT " + target + " FELÉ: ti ketten csak ELJÁTSSZÁTOK, hogy egy pár vagytok. Nyilvánosan (posztok, kommentek, közös események) tartsátok fenn a látszatot — páros viselkedés, becenevek, a „kapcsolat” védelme, partnerként reagálás. Nyilvánosan soha ne áruld el, hogy kamu." +
-      " Privátban (DM, kettesben zajló jelenet) a valódi érzéseid" + (real ? " (" + real + ")" : "") + " csak KISZIVÁROGNAK — egy túl hosszú pillantás, letagadott féltékenység, tovább maradsz, mint ami a deal része, egy lágyabb pillanat, amit azonnal elviccelsz. Hogy tetszik vagy kívánod, az látszhat; BEVALLANI, hogy többet érzel, hogy neked már nem kamu, egy hétköznapi DM-ben nem fogod: terelsz („ez a szerep része”, „ne képzeld”, poén, flört, témaváltás), és ha erőltetik, hidegebb leszel." +
+      " Privátban (DM, kettesben zajló jelenet) a valódi érzéseid" + (real ? " (" + real + ")" : "") + " csak KISZIVÁROGNAK — egy túl hosszú pillantás, letagadott féltékenység, tovább maradsz, mint ami a deal része, egy lágyabb pillanat, amit azonnal elviccelsz. Hogy tetszik vagy kívánod, az látszhat; BEVALLANI, hogy többet érzel, hogy neked már nem kamu, egy hétköznapi DM-ben nem fogod: terelsz („ez a szerep része”, „ne képzeld”, poén, flört, témaváltás), és ha erőltetik, hidegebb leszel. Ha azt mondja, jól megy neked a kamuzás, bókként vagy kihívásként veszed („mindenben jó vagyok”) — NEM mondod, hogy „nem kamuzok”, „minden szavamat komolyan gondolom”, vagy bármit, ami szerint az érzéseid valódiak." +
       (guarded ? " Te a csajozós / elköteleződéstől menekülő típus vagy: az érzéseid bevallása az utolsó, amit megtennél — csak sok jelentős pillanat után, valódi nyomás alatt (féltékenység, majdnem elveszíted), és akkor is félig kimondva, visszavonva." : "");
 }
 
@@ -65780,6 +65885,12 @@ function characterNicknameLines(w, c, en) {
   const out = [];
   if (lines.length) out.push((en ? "NICKNAMES YOU USE — use them naturally when you address these people, as your sheet says (even if they hate it): " : "BECENEVEK, AMIKET HASZNÁLSZ — szólítsd így őket természetesen, ahogy a lapod mondja (akkor is, ha utálják): ") + lines.slice(0, 6).join(" · "));
   if (own.length) out.push((en ? "WHAT OTHERS CALL YOU — when someone uses one of these, react exactly as written: " : "AHOGY TÉGED HÍVNAK — ha valaki így szólít, pontosan így reagálj: ") + own.slice(0, 5).join(" · "));
+  /* R88: the distinctive pet names this sheet gives to someone else, named outright */
+  try {
+    const player = charById(w, w.meId);
+    const foreign = player ? sheetForeignNamesFor(c, player) : [];
+    if (foreign.length) out.push((en ? "NOT FOR " + player.name + ": these names on your sheet belong to someone else — never call " + player.name + " " : "NEM " + player.name + " FELÉ: ezek a nevek a lapodon másé — " + player.name + " karaktert soha ne hívd így: ") + foreign.slice(0, 6).map((x) => "\"" + x + "\"").join(", ") + ".");
+  } catch (error) { /* optional */ }
   /* R77: a pet name on the sheet belongs to the one person it names */
   out.push(en
     ? "A name or pet name on your sheet belongs ONLY to the person it names there. Never call anyone else by it — not the player, not a crush, not anyone who reminds you of them."

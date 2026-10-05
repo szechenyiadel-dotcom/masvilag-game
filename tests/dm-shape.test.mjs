@@ -43,3 +43,22 @@ test("R85: a failed picture never takes the DM text down with it", () => {
   assert.match(source, /spontaneousImagePrompt && false\n/, "R86: unprompted DMs carry no picture");
   assert.match(source, /\(explicitImageRequest \|\| playerSentImage\)/, "R86: a picture only when the player sent or asked for one");
 });
+
+test("R89: comments / posts / DMs keep only the typed line, never roleplay narration", () => {
+  const ctx = vm.createContext({ String, RegExp, Array, charById: (w, id) => ({ feng: { name: "Feng Xiao" } }[id]) });
+  vm.runInContext(pick(["stripSocialRoleplayNarration"]), ctx);
+  const s = (t) => ctx.stripSocialRoleplayNarration({}, "feng", t);
+  assert.equal(s('Feng stares at the comment and smirks. "Typical. Can\'t even handle one without getting a response."'), "Typical. Can't even handle one without getting a response.");
+  assert.equal(s("*leans back* You wish."), "You wish.");
+  assert.equal(s("Feng smirks."), "");
+  assert.equal(s('She said "no" and I believed her.'), 'She said "no" and I believed her.', "a quote inside an ordinary sentence stays");
+  assert.equal(s("Typical. Can't even handle one."), "Typical. Can't even handle one.");
+  assert.match(source, /\/\\\*\[\^\*\]\+\\\*\/\.test\(String\(t \|\| ""\)\) \? requestedReplyRaw : stripSocialRoleplayNarration/);
+});
+
+test("R90: 'text me' DMs are queued even though the saved world has no meId", () => {
+  const body = pick(["enqueueCommentAgreedDm"]);
+  assert.match(body, /const meId = \(w && w\.meId\) \|\| \(info && info\.playerId\) \|\| "";/);
+  assert.match(source, /enqueueCommentAgreedDm\(n, botId, \{ kind: "request", playerId: freshActorId,/);
+  assert.match(source, /STAY IN THIS LANE — /);
+});

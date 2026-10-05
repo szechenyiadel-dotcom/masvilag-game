@@ -251,6 +251,7 @@ HUNGARIAN OUTPUT:
 
 const COMMENT_POLICY = `
 COMMENT / REPLY REALISM — HARD CONTRACT
+- Comments, replies, posts and DMs are TYPED TEXT the character sends from their phone: no narration, no *actions*, no third-person description of themselves ("Feng smirks…"), no quotation marks around their own line. Only the line they would actually type. (Exception: a DM where the player writes *roleplay* — then roleplay style is allowed. Scenes are narrated as always.)
 Fresh-post activity is a live conversation, not a single-bot exchange.
 - For a fresh post, comments may keep arriving throughout its configured fresh-comment window.
 - A direct reply to a comment is high-priority and should receive a contextual reply immediately when an eligible character would naturally answer.
