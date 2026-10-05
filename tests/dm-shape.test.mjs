@@ -37,3 +37,7 @@ test("R84: a DM the player asked for ('text me') is not held back by an open sce
   assert.match(source, /commentAgreedDm \? "" :/);
   assert.match(source, /if\(pausedFor&&!\/\^comment-dm-\/\.test\(String\(row\.trigger\|\|""\)\)\)continue;/);
 });
+
+test("R85: a failed picture never takes the DM text down with it", () => {
+  assert.match(source, /async function generateAiChatSnap\(character, snapPrompt, addImage, media\) \{\n  try \{\n    return await generateAiChatSnapUnsafe\(/);
+});
