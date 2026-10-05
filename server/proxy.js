@@ -2432,7 +2432,10 @@ function buildGeminiPayload(
      tokens) came back cut off mid-JSON and the app found no usable comment. Comments think little and get room. */
   const geminiSource = String(body?.source || "").trim().toLowerCase();
   const geminiComment = geminiSource === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(geminiSource) || geminiSource.includes("player-post-comment");
-  if (geminiComment) {
+  /* R91: the same cut-off hit DMs ("text me" came back as '…couldn't say it' at 700 tokens with 669 spent thinking);
+     every ordinary request gets the room, only the deep sheet readings keep their own long budget */
+  const geminiRoomy = geminiComment || (body?.quality !== "deep" && (Number(body.max_tokens) || 700) < 4000);
+  if (geminiRoomy) {
     payload.generationConfig.maxOutputTokens = (Number(body.max_tokens) || 700) + 2048;
     if (/^gemini-3/i.test(String(body?.model || ""))) payload.generationConfig.thinkingConfig = { thinkingLevel: "LOW" };
   }
