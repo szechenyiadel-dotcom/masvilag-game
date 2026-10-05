@@ -53,6 +53,9 @@ test("R89: comments / posts / DMs keep only the typed line, never roleplay narra
   assert.equal(s("Feng smirks."), "");
   assert.equal(s('She said "no" and I believed her.'), 'She said "no" and I believed her.', "a quote inside an ordinary sentence stays");
   assert.equal(s("Typical. Can't even handle one."), "Typical. Can't even handle one.");
+  assert.equal(s('"Maybe? Then you better start acting like one."'), "Maybe? Then you better start acting like one.", "R94: a wholly quoted DM loses its quotes");
+  assert.match(source, /never push to make it real/, "R94: the fake-dating lane forbids pushing to make it real");
+  assert.match(source, /casanova\|lothario/, "R94: broader player-type words");
   assert.match(source, /\/\\\*\[\^\*\]\+\\\*\/\.test\(String\(t \|\| ""\)\) \? requestedReplyRaw : stripSocialRoleplayNarration/);
 });
 
