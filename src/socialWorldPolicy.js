@@ -346,13 +346,36 @@ function appendPolicy(value, policy) {
   return `${text}\n\n${policy}`.trim();
 }
 
+/* The app's active language, stated outright on every AI request (start and end of the system text, so prompt
+   trimming keeps it). The app writes it to window.__MASVILAG_ACTIVE_LANG whenever the language is set. */
+const ENGLISH_STAMP_MARKER = "[MASVILAG_ACTIVE_LANGUAGE_EN]";
+const ENGLISH_STAMP = `${ENGLISH_STAMP_MARKER}
+ACTIVE APP LANGUAGE FOR THIS REQUEST: ENGLISH.
+Every user-visible string you write MUST be natural English: posts, captions, comments, replies, DMs, group-chat lines, Scene speech, actions and narration, Notes, gossip, Events and invitations, notifications, relationship labels and prose, moods, reasons ("why"), summaries, memories, diary lines and any other text a player can see.
+Parts of these instructions, the character sheets, memories or earlier messages may be written in Hungarian. Treat them as background only and NEVER answer in Hungarian, not even one word or one line. Names, @handles, #tags and verbatim quotes stay as they are.`;
+
+function activeAppLanguage() {
+  try {
+    const lang = typeof window !== "undefined" ? String(window.__MASVILAG_ACTIVE_LANG || "") : "";
+    return lang === "en" ? "en" : lang === "hu" ? "hu" : "";
+  } catch {
+    return "";
+  }
+}
+
+function stampActiveLanguage(system, lang) {
+  const text = String(system || "");
+  if (lang !== "en" || text.includes(ENGLISH_STAMP_MARKER)) return text;
+  return `${ENGLISH_STAMP}\n\n${text}\n\n${ENGLISH_STAMP}`.trim();
+}
+
 function strengthenAiPayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
 
   const next = { ...payload };
   const combinedPolicy = `${ACTIVE_LANGUAGE_POLICY}\n${RELATIONSHIP_POLICY}\n${CONVERSATION_REALITY_POLICY}\n${DM_SCENE_INITIATIVE_POLICY}\n${RESPONSE_FIDELITY_AND_MATURE_TONE_POLICY}\n${KNOWLEDGE_AND_LIVING_SOCIAL_POLICY}\n${SIMS_SOCIAL_CONTEXT_POLICY}\n${COMMENT_POLICY}\n${SIMS_WORLD_POLICY}\n${RHYTHM_POLICY}`;
 
-  next.system = appendPolicy(next.system, combinedPolicy);
+  next.system = stampActiveLanguage(appendPolicy(next.system, combinedPolicy), activeAppLanguage());
 
   return next;
 }
