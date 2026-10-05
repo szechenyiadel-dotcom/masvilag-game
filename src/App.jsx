@@ -50430,6 +50430,29 @@ function simDeferQueued(w, actionId, retryAt) {
   sim.at = now();
 }
 
+/* R77: the feed refresh after the player's own post / scene end / popup scene is the ONLY way the feed updates.
+   If it fails (server restart, network drop, every provider busy, unusable answer) it is retried up to 3 more times
+   (45 s, 90 s, 135 s later) instead of being thrown away. Everything else keeps the old drop behaviour. */
+function simRetryOrDropQueued(w, action) {
+  const sim = ensureSimState(w);
+  const row = action && action.id ? sim.queue.find((x) => x && x.id === action.id) : null;
+  const isPlayerFeedRefresh =
+    row &&
+    row.type === "world-full" &&
+    row.source === "player-event" &&
+    row.payload &&
+    ["player-post", "roleplay-ended", "popup-choice"].includes(String(row.payload.trigger || ""));
+  const failures = row ? Math.max(0, Math.round(Number(row.failCount) || 0)) + 1 : 0;
+  if (isPlayerFeedRefresh && failures <= 3) {
+    row.failCount = failures;
+    row.retryAt = now() + failures * 45000;
+    sim.at = now();
+    return true;
+  }
+  simDropQueued(w, action && action.id);
+  return false;
+}
+
 function simMarkDone(w, action) {
   const sim = ensureSimState(w);
   sim.running = "";
@@ -59925,7 +59948,8 @@ const signOut = useCallback(async () => {
       const laneWaiting = !laneOk && AI.waitingAt >= laneStartedAt;
       update((n) => {
         if (laneWaiting) simDeferQueued(n, laneAction.id, AI.backgroundWaitUntil);
-        else simDropQueued(n, laneAction.id);
+        else if (laneOk) simDropQueued(n, laneAction.id);
+        else simRetryOrDropQueued(n, laneAction);
         if (laneOk) {
           try { markSimulationCadence(n, laneAction); } catch (error) { /* cadence is optional */ }
           const sim = ensureSimState(n);
@@ -60300,7 +60324,8 @@ const signOut = useCallback(async () => {
         ) {
           /* Out of free AI capacity: keep the action and retry it later instead of losing it. */
           if (!ok && AI.waitingAt >= actionStartedAt) simDeferQueued(n, queued.id, AI.backgroundWaitUntil);
-          else simDropQueued(n, queued.id);
+          else if (ok) simDropQueued(n, queued.id);
+          else simRetryOrDropQueued(n, queued);
         }
 
         if (ok) {

@@ -153,7 +153,7 @@ test("App: a player-triggered action that hit 'no free capacity' stays queued an
   assert.equal(world.sim.queue[1].retryAt, NOW + 20_000, "never retried sooner than 20 s");
   context.simDropQueued(world, "a");
   assert.deepEqual(world.sim.queue.map((x) => x.id), ["b"]);
-  assert.match(source, /if \(!ok && AI\.waitingAt >= actionStartedAt\) simDeferQueued\(n, queued\.id, AI\.backgroundWaitUntil\);\s*else simDropQueued\(n, queued\.id\);/);
-  assert.match(source, /if \(laneWaiting\) simDeferQueued\(n, laneAction\.id, AI\.backgroundWaitUntil\);\s*else simDropQueued\(n, laneAction\.id\);/);
+  assert.match(source, /if \(!ok && AI\.waitingAt >= actionStartedAt\) simDeferQueued\(n, queued\.id, AI\.backgroundWaitUntil\);\s*else if \(ok\) simDropQueued\(n, queued\.id\);/);
+  assert.match(source, /if \(laneWaiting\) simDeferQueued\(n, laneAction\.id, AI\.backgroundWaitUntil\);\s*else if \(laneOk\) simDropQueued\(n, laneAction\.id\);/);
   assert.match(source, /!\(Number\(a\.retryAt\) > now\(\)\)/);
 });
