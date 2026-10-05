@@ -61853,6 +61853,55 @@ function voiceCard(c) {
   ].filter(Boolean).join("\n\n").slice(0, 6500);
 }
 
+/* CLAUDE FIX R75: EXTREME PERSONALITIES ARE PLAYED AT FULL STRENGTH. A character whose own sheet says psychopath,
+   obsessed, possessive, sadistic, manipulative or violent gets a named, explicit order on their own card, so the
+   model cannot average them into a polite, generic person. */
+const EXTREME_NATURES = [
+  { key: "psychopath", re: /psycho|sociopath|pszichop|sz[oó]ciop|no empathy|lacks? empathy|empathy[^.\n]{0,12}(?:zero|none)|empátia[^.\n]{0,12}(?:nincs|nulla)|cold[- ]blooded|hidegvér/i,
+    order: "a psychopath: no real empathy or guilt; calm, controlled, sometimes charming on the surface and cold underneath; manipulates and uses people; never sincerely apologises; a quiet, believable menace sits under what they say; they enjoy control" },
+  { key: "obsessed", re: /obsess|megsz[aá]ll|fixat|yandere|stalk|k[oö]vet[oő]\s*m[aá]ni|cannot let (?:her|him|them) go|nem tudja elengedni/i,
+    order: "obsessed: fixated on the person they are obsessed with — they notice everything about them, every post, every like, who they talk to; they cannot let it go, keep circling back to them, get intense, needy, controlling or menacing about them, and see anyone close to them as a threat" },
+  { key: "possessive", re: /possess|birtokl|territorial|tulajdon[aá]nak tekint|jealous to the extreme|betegesen f[eé]lt[eé]keny/i,
+    order: "possessive: treats the person they want as theirs; open, territorial jealousy, warning others off, demanding to know where they were and with whom" },
+  { key: "sadistic", re: /sadis|szadis|cruel|kegyetlen|enjoys? (?:others'? )?(?:pain|suffering)|ruthless|k[oö]ny[oö]rtelen/i,
+    order: "cruel: enjoys others' discomfort; cutting, humiliating, merciless, and never softens it into a joke" },
+  { key: "manipulative", re: /manipul|gaslight|mind games|kihaszn[aá]l|játszmáz/i,
+    order: "manipulative: twists words, guilt-trips, plays people against each other, says one thing and means another" },
+  { key: "violent", re: /violent|er[oő]szakos|unhinged|explosive temper|volatile|kisz[aá]m[ií]thatatlan|dangerous|vesz[eé]lyes|killer|gyilkos/i,
+    order: "dangerous: volatile, a short fuse, threats that feel real, an edge that makes people careful around them" },
+];
+function extremeNatureText(w, c) {
+  if (!c) return "";
+  let bible = null;
+  try { bible = characterBibleFor(w, c.id); } catch (error) { bible = null; }
+  const extremes = bible && Array.isArray(bible.extremes) ? bible.extremes.map((x) => [x && x.trait, x && x.toward, x && x.shows].filter(Boolean).join(" ")).join(" | ") : "";
+  return [c.personality, c.traits, c.extra, c.speech, bible && bible.core, extremes].filter(Boolean).join(" \n ");
+}
+function extremeNatureDirective(w, c) {
+  if (!w || !c || isHuman(w, c.id)) return "";
+  const text = extremeNatureText(w, c);
+  if (!text) return "";
+  const found = EXTREME_NATURES.filter((row) => row.re.test(text));
+  if (!found.length) return "";
+  /* whom they are fixated on: their own relationship readings */
+  let targets = [];
+  try {
+    targets = [w.meId, ...((w.chars || []).map((x) => x && x.id))]
+      .filter((id) => id && id !== c.id)
+      .filter((id) => {
+        const rel = getRel(w, c.id, id) || EMPTY_REL;
+        const relText = [rel.bond, rel.type, rel.mood, rel.hidden, rel.label].filter(Boolean).join(" ");
+        return (Number(rel.obsession) || 0) >= 50 || /obsess|megsz[aá]ll|possess|birtokl|fixat/i.test(relText);
+      })
+      .slice(0, 3)
+      .map((id) => nameOfIn(w, id));
+  } catch (error) { targets = []; }
+  const name = String(c.name || "").toUpperCase();
+  return "EXTREME NATURE OF " + name + " — HARD RULE, FROM THEIR OWN SHEET: " + name + " is " + found.map((row) => row.order).join("; and ") + "." +
+    (targets.length ? " Their fixation: " + targets.join(", ") + "." : "") +
+    " Play this at FULL strength in every DM, comment, post, group chat and scene they write — it is who they are, not a mood that needs a trigger. Never soften it, never make them suddenly nice, polite, reasonable or self-aware about it, no therapy talk, no redemption. Fictional adults only; never write the player's actions, feelings or consent.";
+}
+
 function voiceStyleCardsForIds(w, ids, actorId) {
   if (!w) return "";
   const unique = [];
@@ -61893,7 +61942,10 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       let bible = "";
       try { bible = characterBibleCard(w, c, room); } catch (error) { bible = ""; }
       const owner = "PRIVATE CARD OF " + String(c.name || "").toUpperCase() + " — ONLY " + String(c.name || "").toUpperCase() + " KNOWS THESE FACTS. Places, events, secrets and people from this card come only from their mouth, or from someone whose OWN card has the same thing.";
-      return [owner, style, personaBlock, bible].filter(Boolean).join("\n");
+      /* R75 */
+      let extreme = "";
+      try { extreme = extremeNatureDirective(w, c); } catch (error) { extreme = ""; }
+      return [owner, extreme, style, personaBlock, bible].filter(Boolean).join("\n");
     })
     .filter(Boolean);
 

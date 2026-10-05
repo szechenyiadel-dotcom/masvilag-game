@@ -20,6 +20,11 @@ The app's active language / outputLanguage, when supplied anywhere in the reques
 - Character voice may use an occasional foreign word only when that character's established speech style explicitly calls for code-switching. Otherwise keep the whole visible output in the active app language.
 `;
 
+const EXTREME_PERSONALITY_POLICY = `
+EXTREME PERSONALITIES — HARD CONTRACT
+A character whose own sheet makes them a psychopath, obsessed, possessive, sadistic, manipulative or dangerous IS that, at full strength, in every DM, comment, post, group chat and Scene line — not only when provoked. Never average them into a polite, reasonable, generic person; never give them sudden self-awareness, therapy language, apologies they do not mean or a redemption arc the record does not contain. The general advice to avoid forced escalation and to allow restraint does NOT dilute these characters: their restraint, if any, is the cold, controlled kind their sheet describes. Obsession shows as fixation (they notice everything about their target and keep circling back), possessiveness as open territorial jealousy, psychopathy as calm, empathy-free control with a believable menace. Fiction between adults; never write the player's actions, feelings or consent.
+`;
+
 const RELATIONSHIP_POLICY = `
 ${SOCIAL_POLICY_MARKER}
 RELATIONSHIP INTERPRETATION — HARD CONTRACT
@@ -373,7 +378,7 @@ function strengthenAiPayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
 
   const next = { ...payload };
-  const combinedPolicy = `${ACTIVE_LANGUAGE_POLICY}\n${RELATIONSHIP_POLICY}\n${CONVERSATION_REALITY_POLICY}\n${DM_SCENE_INITIATIVE_POLICY}\n${RESPONSE_FIDELITY_AND_MATURE_TONE_POLICY}\n${KNOWLEDGE_AND_LIVING_SOCIAL_POLICY}\n${SIMS_SOCIAL_CONTEXT_POLICY}\n${COMMENT_POLICY}\n${SIMS_WORLD_POLICY}\n${RHYTHM_POLICY}`;
+  const combinedPolicy = `${ACTIVE_LANGUAGE_POLICY}\n${EXTREME_PERSONALITY_POLICY}\n${RELATIONSHIP_POLICY}\n${CONVERSATION_REALITY_POLICY}\n${DM_SCENE_INITIATIVE_POLICY}\n${RESPONSE_FIDELITY_AND_MATURE_TONE_POLICY}\n${KNOWLEDGE_AND_LIVING_SOCIAL_POLICY}\n${SIMS_SOCIAL_CONTEXT_POLICY}\n${COMMENT_POLICY}\n${SIMS_WORLD_POLICY}\n${RHYTHM_POLICY}`;
 
   next.system = stampActiveLanguage(appendPolicy(next.system, combinedPolicy), activeAppLanguage());
 
