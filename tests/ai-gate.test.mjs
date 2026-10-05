@@ -58,7 +58,7 @@ test("DM uses Dolphin key 1, Venice key 2, then Mistral; Nemotron is reserved fo
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
   assert.deepEqual(order("dm", { foreground: true }), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "player-waiting dm");
-  assert.deepEqual(order("dm"), ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"], "unprompted dm: free capacity only");
+  assert.deepEqual(order("dm"), ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"], "unprompted dm: free first, paid Venice last (R78)");
   for (const extra of [{}, { foreground: true }]) {
     assert.deepEqual(order("scene", extra), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "scene " + JSON.stringify(extra));
   }
@@ -112,7 +112,7 @@ test("A free provider that answers is used normally for background work, and Mis
   assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
 });
 
-test("An unprompted (background) DM uses free capacity only; a player-waiting DM keeps Dolphin -> Venice -> Mistral 1 -> 2", async () => {
+test("An unprompted (background) DM uses free capacity first, then Venice (R78); a player-waiting DM keeps Dolphin -> Venice -> Mistral 1 -> 2", async () => {
   const first = gate(ENV, (provider) => ok(provider));
   const written = await first.context.executeAITask(task(first.context, "dm"));
   assert.equal(written.ok, true);
@@ -121,8 +121,8 @@ test("An unprompted (background) DM uses free capacity only; a player-waiting DM
   const result = await down.context.executeAITask(task(down.context, "dm"));
   assert.equal(result.waiting, true);
   assert.equal(result.status, 503);
-  assert.deepEqual(Array.from(down.calls), ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"]);
-  assert.ok(!down.calls.some((provider) => ["openai", "openrouter-dm-venice", "mistral", "mistral2"].includes(provider)), "no paid provider for a background DM: " + down.calls);
+  assert.deepEqual(Array.from(down.calls), ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"]);
+  assert.ok(!down.calls.some((provider) => ["openai", "mistral", "mistral2"].includes(provider)), "R78: Venice is the only paid provider of a background DM: " + down.calls);
   const waiting = gate(ENV, (provider) => quota(provider));
   await waiting.context.executeAITask(task(waiting.context, "dm", { foreground: true }));
   assert.deepEqual(Array.from(waiting.calls), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]);
@@ -817,7 +817,7 @@ test("Final OpenRouter routing: the first slot runs Gemma 4 31B (free) on the fu
   assert.match(source, /cognitivecomputations\/dolphin-mistral-24b-venice-edition/);
   assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
-  assert.match(source, /proxyCompatibleMessage\("openrouter3", process\.env\.OPENROUTER_API_KEY/);
+  assert.match(source, /const openRouter3Key = process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY;\n\s+let result = await proxyCompatibleMessage\("openrouter3", openRouter3Key/, "R78: Nemotron on the funded key 2");
   assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/);
   assert.match(source, /provider === "openrouter-dm-dolphin"\n\s+\/\* R74[^\n]*\*\/\n\s+\? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ enabled: false, exclude: true \} \}/);
   assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openai"\]/);

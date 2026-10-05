@@ -22,7 +22,7 @@ test("Popups ask for their own 'popup' source, not the paid Scene chain", () => 
   assert.match(pick(["genPopupEventReroll"]), /foreground:true/);
   assert.match(pick(["genPopupCustomOutcome"]), /foreground:true/);
   assert.match(proxy, /source === "popup" \|\| source === "invite"\) \{[\s\S]{0,260}raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"\]/);
-  assert.match(proxy, /allowPaidBackground: AI_ALLOW_PAID_BACKGROUND \|\| \(source === "dm" && playerWaiting\) \|\| source === "scene" \|\| isComment \}/, "background popups never get paid capacity");
+  assert.match(proxy, /allowPaidBackground: AI_ALLOW_PAID_BACKGROUND \|\| source === "dm" \|\| source === "scene" \|\| isComment \}/, "background popups never get paid capacity");
 });
 
 function cadence() {
@@ -67,7 +67,7 @@ test("Unprompted DMs: 'text me', no follow-back and unfollow always come; any ot
   assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete sim\.deferredAutonomousDms\[row\.botId\];continue;\}/);
   assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete state\.pendingDmTriggers\[row\.key\];continue;\}/);
   assert.match(source, /if \(!dmTriggerAlwaysAllowed\(action\.payload && action\.payload\.trigger\)\) \{\n      sim\.otherDmTimes/);
-  assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,220}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"\]/);
+  assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,520}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"\]/);
 });
 
 test("A spontaneous Event invitation comes at most once a day and is written on free capacity", () => {

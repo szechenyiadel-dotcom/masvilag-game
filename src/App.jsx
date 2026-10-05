@@ -8875,8 +8875,9 @@ async function askJSON(system, prompt, options = {}) {
           const parsed = parseAiJsonResponse(raw);
           if (!validateGeneratedLanguage(parsed, lang, strictMode)) {
             if (!strictMode) {
+              /* R78: the one stricter language retry is extra — it must not use up a DM's only try (maxTries 1),
+                 which threw the whole reply away ("Hibás válasz") when a field looked Hungarian. */
               strictMode = true;
-              tries++;
               continue;
             }
             throw new Error(lang === "en" ? "Wrong output language." : "Hibás kimeneti nyelv.");
@@ -61994,11 +61995,11 @@ const EXTREME_NATURES = [
     order: "obsessed: fixated on the person they are obsessed with — they notice everything about them, every post, every like, who they talk to; they cannot let it go, keep circling back to them, get intense, needy, controlling or menacing about them, and see anyone close to them as a threat" },
   { key: "possessive", re: /possess|birtokl|territorial|tulajdon[aá]nak tekint|jealous to the extreme|betegesen f[eé]lt[eé]keny/i,
     order: "possessive: treats the person they want as theirs; open, territorial jealousy, warning others off, demanding to know where they were and with whom" },
-  { key: "sadistic", re: /sadis|szadis|cruel|kegyetlen|enjoys? (?:others'? )?(?:pain|suffering)|ruthless|k[oö]ny[oö]rtelen/i,
+  { key: "sadistic", re: /sadis|szadis|cruel|kegyetlen|enjoys? (?:others'? )?(?:pain|suffering)/i,
     order: "cruel: enjoys others' discomfort; cutting, humiliating, merciless, and never softens it into a joke" },
-  { key: "manipulative", re: /manipul|gaslight|mind games|kihaszn[aá]l|játszmáz/i,
+  { key: "manipulative", re: /manipul|gaslight|mind games|játszmáz/i,
     order: "manipulative: twists words, guilt-trips, plays people against each other, says one thing and means another" },
-  { key: "violent", re: /violent|er[oő]szakos|unhinged|explosive temper|volatile|kisz[aá]m[ií]thatatlan|dangerous|vesz[eé]lyes|killer|gyilkos/i,
+  { key: "violent", re: /violent|er[oő]szakos|unhinged|explosive temper|killer|gyilkos/i,
     order: "dangerous: volatile, a short fuse, threats that feel real, an edge that makes people careful around them" },
 ];
 function extremeNatureText(w, c) {
@@ -62012,7 +62013,18 @@ function extremeNatureDirective(w, c) {
   if (!w || !c || isHuman(w, c.id)) return "";
   const text = extremeNatureText(w, c);
   if (!text) return "";
-  const found = EXTREME_NATURES.filter((row) => row.re.test(text));
+  /* R78: a word only counts when the sheet does not negate it ("not possessive", "nem kegyetlen", "never violent") */
+  const affirmed = (re) => {
+    const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    let m;
+    while ((m = global.exec(text))) {
+      const before = text.slice(Math.max(0, m.index - 24), m.index);
+      if (!/(?:\bnot|\bnever|\bno longer|n't|\bnem|\bsoha|\bsosem|\bnincs|\bsemmi)\b[^.,;\n]{0,16}$/i.test(before)) return true;
+      if (m[0] === "") global.lastIndex += 1;
+    }
+    return false;
+  };
+  const found = EXTREME_NATURES.filter((row) => affirmed(row.re));
   if (!found.length) return "";
   /* whom they are fixated on: their own relationship readings */
   let targets = [];
@@ -62030,6 +62042,9 @@ function extremeNatureDirective(w, c) {
   const name = String(c.name || "").toUpperCase();
   return "EXTREME NATURE OF " + name + " — HARD RULE, FROM THEIR OWN SHEET: " + name + " is " + found.map((row) => row.order).join("; and ") + "." +
     (targets.length ? " Their fixation: " + targets.join(", ") + "." : "") +
+    (found.some((row) => row.key === "obsessed" || row.key === "possessive")
+      ? " The obsession / possessiveness is aimed ONLY at " + (targets.length ? targets.join(", ") : "the person their sheet names") + " — friends and everyone else are never treated as theirs, never get \"you're mine\" or territorial jealousy."
+      : "") +
     " Play this at FULL strength in every DM, comment, post, group chat and scene they write — it is who they are, not a mood that needs a trigger. Never soften it, never make them suddenly nice, polite, reasonable or self-aware about it, no therapy talk, no redemption. Fictional adults only; never write the player's actions, feelings or consent.";
 }
 

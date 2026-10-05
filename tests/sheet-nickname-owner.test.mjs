@@ -57,3 +57,7 @@ test("The player's post gets 5-8 comments instead of 3-6", () => {
   assert.match(source, /requireHumanAuthor: true, minComments: 5, maxComments: 8, playerPostContentIsolation: true \}/);
   assert.match(pick(["isolatedPlayerPostComments"]), /Math\.min\(8, Math\.round\(Number\(options\.maxComments\) \|\| 8\)\)/);
 });
+
+test("R78: the stricter language retry does not use up a DM's only try", () => {
+  assert.match(source, /if \(!strictMode\) \{\n\s+\/\*[\s\S]*?\*\/\n\s+strictMode = true;\n\s+continue;\n\s+\}/);
+});
