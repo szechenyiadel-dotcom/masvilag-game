@@ -8603,7 +8603,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
       throw err;
     }
     resetAiStrike(!!requestMeta.interactive);
-    const msg = (data && data.error && data.error.message) || `HTTP ${code}`;
+    const msg = activeLanguageHalf((data && data.error && data.error.message) || `HTTP ${code}`);
     throw new Error(CURRENT_LANG === "en" ? `The AI returned an error: ${msg}` : `Az AI hibát adott: ${msg}`);
   }
 
@@ -8612,6 +8612,18 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   const txt = data.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   if (!txt.trim()) throw new Error(CURRENT_LANG === "en" ? "The AI returned an empty answer." : "Az AI üres választ adott.");
   return txt;
+}
+
+/* R68: the server writes some notices as "English text / magyar szöveg"; show only the active language. */
+function activeLanguageHalf(message) {
+  const text = String(message || "");
+  const at = text.indexOf(" / ");
+  if (at < 0) return text;
+  const left = text.slice(0, at), right = text.slice(at + 3);
+  const rightHu = /[őűáéíóöúü]/i.test(right), leftHu = /[őűáéíóöúü]/i.test(left);
+  if (CURRENT_LANG === "en" && rightHu && !leftHu) return left.trim();
+  if (CURRENT_LANG !== "en" && leftHu === false && rightHu) return right.trim();
+  return text;
 }
 
 function languageInstruction(lang, strict) {
@@ -8648,10 +8660,37 @@ function generatedTextLooksHungarian(result) {
   return huOnlyLetters >= 3 || (huWords >= 4 && huWords > enWords);
 }
 
-function validateGeneratedLanguage(result, expectedLanguage) {
+/* CLAUDE FIX R68: a single short Hungarian comment, mood or reason ("megint az a hely?",
+   "dühös rá") used to pass as English because the whole answer was counted together.
+   Each visible string is now looked at on its own; capitalised words (names) do not count. */
+const HU_FUNCTION_WORDS = new Set("és hogy nem egy az ez már még csak mint vagy aki ami nagyon itt ott lesz volt sem mert én ő ők nincs igen hol mit miért mikor velem veled neki nekem neked rá ide oda szia jó rossz kell lehet tudom tudod nálam nálad azt ezt vagyok vagyunk lenne majd persze akkor úgy így megint is de meg fel le ki be lett van vannak voltak".split(" "));
+const EN_FUNCTION_WORDS = new Set("the and you with from that this is are was were your their what not but for to of in on it i me my we he she they be have has do does did can will just so".split(" "));
+function stringLooksHungarian(value) {
+  const text = String(value || "").replace(/[@#][\p{L}\p{N}_.]+/gu, " ");
+  const words = text.split(/[^\p{L}]+/u).filter(Boolean);
+  if (!words.length) return false;
+  const lower = words.filter((x) => x[0] === x[0].toLowerCase());
+  if (lower.some((x) => /[őű]/.test(x))) return true;
+  const accented = lower.filter((x) => /[áéíóöúü]/.test(x)).length;
+  const hu = lower.filter((x) => HU_FUNCTION_WORDS.has(x)).length;
+  const en = lower.filter((x) => EN_FUNCTION_WORDS.has(x)).length;
+  if (accented >= 2 && accented >= en) return true;
+  if (accented >= 1 && hu >= 1 && en === 0) return true;
+  /* á í ó ö ú ü in a lowercase word (é alone is too common in English loanwords: café, résumé) */
+  if (en === 0 && lower.some((x) => /[áíóöúü]/.test(x))) return true;
+  if (hu >= 2 && en === 0) return true;
+  return false;
+}
+function generatedStringsLookHungarian(result) {
+  return generatedVisibleStrings(result).some((value) => stringLooksHungarian(value));
+}
+
+function validateGeneratedLanguage(result, expectedLanguage, strictAlready = false) {
   if (!result || typeof result !== "object") return false;
   const expected = asLang(expectedLanguage);
   if (expected === "en" && generatedTextLooksHungarian(result)) return false;
+  /* one stricter retry for a Hungarian line hidden in an English answer; after that the display layer translates it */
+  if (expected === "en" && !strictAlready && generatedStringsLookHungarian(result)) return false;
   if (result.language) return asLang(result.language) === expected;
   const text = JSON.stringify(result);
   const huMarks = (text.match(/[áéíóöőúüűÁÉÍÓÖŐÚÜŰ]/g) || []).length;
@@ -8826,7 +8865,7 @@ async function askJSON(system, prompt, options = {}) {
             }
           );
           const parsed = parseAiJsonResponse(raw);
-          if (!validateGeneratedLanguage(parsed, lang)) {
+          if (!validateGeneratedLanguage(parsed, lang, strictMode)) {
             if (!strictMode) {
               strictMode = true;
               tries++;
@@ -9099,6 +9138,9 @@ function looksHungarianText(value) {
   if (text.length < 3 || !/\p{L}/u.test(text)) return false;
   if (/^[@#]/.test(text) || /^https?:/i.test(text)) return false;
   if (/[őűŐŰ]/.test(text)) return true;
+  try { if (stringLooksHungarian(text)) return true; } catch (error) { /* fall back to the old test */ }
+  /* R68: a lowercase word with a Hungarian-only accent mix (á í ó ö ú ü) marks a Hungarian label or chip */
+  if (text.split(/[^\p{L}]+/u).some((x) => x && x[0] === x[0].toLowerCase() && /[áíóöúü]/.test(x))) return true;
   const words = text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
   if (!words.length) return false;
   const stop = words.filter((x) => HU_STOPWORDS.has(x)).length;
@@ -40214,7 +40256,7 @@ FONTOS EMBEREK — kik ők neki, és mit érez irántuk.
 
 Sűrű, tényszerű mondatok, nem esszé. Ne dicsérd, ne ítéld meg, ne szépítsd.
 Csak JSON:
-{"brief":"a kivonat magyarul"}`;
+{"brief":"${CURRENT_LANG === "en" ? "the brief, written in English" : "a kivonat magyarul"}"}`;
 
   const out =
     await askJSON(
@@ -57094,6 +57136,7 @@ export default function App() {
    * Ezért a render aktuális nyelvét rögtön szinkronizáljuk.
    */
   CURRENT_LANG = lang;
+  try { if (typeof window !== "undefined") window.__MASVILAG_ACTIVE_LANG = lang; } catch (error) { /* request layer reads it */ }
   React.useEffect(() => { try { installEnglishDisplayTranslator(); } catch (error) { /* display-only helper */ } }, [lang]);
 
   const langCtxValue =
