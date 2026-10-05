@@ -9028,6 +9028,23 @@ function withCommentTone(source, w, prompt, options) {
   return { prompt: insertBeforeProtectedTail(prompt, matureCommentInstruction(w, participants || [], commenters || null) + hostile), options: rest };
 }
 
+/* R83: a DM answer in another shape — {"DM":{"content":…}}, {"type":"DM","content":…}, {"message":{"text":…}} — used to
+   lose the line ("text me" DMs never arrived: Groq wrote "content", the app read "text"). The line is copied to text + reply. */
+function normalizeDmAnswerShape(source, out) {
+  if (String(source || "") !== "dm" || !out || typeof out !== "object" || Array.isArray(out)) return out;
+  const pick = (v) => (typeof v === "string" && v.trim() ? v.trim() : "");
+  const nested = [out.dm, out.DM, out.message, out.reply, out.response].find((v) => v && typeof v === "object" && !Array.isArray(v)) || null;
+  const line =
+    pick(out.text) || pick(out.reply) || pick(out.message) ||
+    pick(out.content) || pick(out.dmText) || pick(out.body) ||
+    (nested ? pick(nested.text) || pick(nested.content) || pick(nested.message) || pick(nested.body) : "");
+  if (!line) return out;
+  const fixed = { ...out };
+  if (!pick(fixed.text)) fixed.text = line;
+  if (!pick(fixed.reply)) fixed.reply = line;
+  return fixed;
+}
+
 function askWorldWritingJSON(source, w, system, prompt, options = {}) {
   const toned = withCommentTone(source, w, prompt, options);
   return askWorldJSON(
@@ -9038,12 +9055,12 @@ function askWorldWritingJSON(source, w, system, prompt, options = {}) {
       ...toned.options,
       source: String(source || ""),
     }
-  );
+  ).then((out) => normalizeDmAnswerShape(source, out));
 }
 
 async function askWorldWritingJSONInteractive(source, w, system, prompt, options = {}) {
   const toned = withCommentTone(source, w, prompt, options);
-  return askWorldJSONInteractive(
+  const out = await askWorldJSONInteractive(
     w,
     system,
     toned.prompt,
@@ -9052,6 +9069,7 @@ async function askWorldWritingJSONInteractive(source, w, system, prompt, options
       source: String(source || ""),
     }
   );
+  return normalizeDmAnswerShape(source, out);
 }
 
 
