@@ -5072,7 +5072,10 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
       ? Math.min(baseTimeout, 65000)
       : source === "dm" || source === "group-chat"
         ? Math.min(baseTimeout, 30000)
-        : source === "comments" || source === "feed-post"
+        : source === "comments"
+          /* R73: Nemotron often thinks past 25 s on a comment; a reply must reach the next provider in time */
+          ? Math.min(baseTimeout, 15000)
+          : source === "feed-post"
           ? Math.min(baseTimeout, 25000)
           : Math.min(baseTimeout, 35000);
   const providerTimeout =
@@ -5148,7 +5151,11 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
     const r = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify(buildCompatibleChatPayload(providerBody, model)),
+      /* R73: Nemotron (a reasoning model) wrote its whole chain of thought into the answer ("The user wants me to
+         generate a DM ...") and ran out of time: ask OpenRouter for a short, hidden reasoning pass. */
+      body: JSON.stringify(provider === "openrouter3"
+        ? { ...buildCompatibleChatPayload(providerBody, model), reasoning: { effort: "low", exclude: true } }
+        : buildCompatibleChatPayload(providerBody, model)),
       signal: ctrl.signal,
     });
     const raw = await r.text();

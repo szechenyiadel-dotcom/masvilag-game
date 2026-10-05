@@ -854,3 +854,8 @@ test("A JSON request answered without any JSON goes on to the next provider; a c
   const foreground = await none.context.executeAITask(jsonTask("comments", { foreground: true }));
   assert.equal(foreground.ok, true, "a player waiting still gets the answer, as before");
 });
+
+test("Nemotron gets a short hidden reasoning pass, and on comments/replies 15 s before the next provider takes over", () => {
+  assert.match(source, /provider === "openrouter3"\n        \? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ effort: "low", exclude: true \} \}/);
+  assert.match(source, /: source === "comments"\n[^\n]*\n          \? Math\.min\(baseTimeout, 15000\)/);
+});
