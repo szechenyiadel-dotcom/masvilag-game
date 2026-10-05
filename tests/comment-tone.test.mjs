@@ -24,7 +24,7 @@ function harness() {
     askWorldJSON: async (w, system, prompt, options) => { sent.push({ via: "background", prompt, options }); return {}; },
     askWorldJSONInteractive: async (w, system, prompt, options) => { sent.push({ via: "interactive", prompt, options }); return {}; },
   });
-  vm.runInContext(pick(["worldContentLevel", "isKnownAdultCharacter", "matureParticipantsAreAdults", "matureCommentInstruction", "withCommentTone", "askWorldWritingJSON", "askWorldWritingJSONInteractive"]), context);
+  vm.runInContext(pick(["worldContentLevel", "isKnownAdultCharacter", "matureParticipantsAreAdults", "matureCommentInstruction", "withCommentTone", "askWorldWritingJSON", "askWorldWritingJSONInteractive", "normalizeDmAnswerShape"]), context);
   return { context, sent };
 }
 const world = (extra = {}) => ({
