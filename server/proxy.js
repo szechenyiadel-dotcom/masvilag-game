@@ -5666,7 +5666,11 @@ function taskProviderOrder(requestedProvider, body) {
   let raw;
 
   const playerWaiting = isForegroundRequest(body);
-  if (source === "dm") {
+  if (source === "dm" && !playerWaiting) {
+    /* R70: an unprompted DM nobody is waiting for uses free capacity only:
+       Dolphin -> Nemotron -> free Gemini -> Groq 1 -> Groq 2 (when it fits). */
+    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"];
+  } else if (source === "dm") {
     /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
     raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (source === "popup") {
@@ -5709,7 +5713,7 @@ function taskProviderOrder(requestedProvider, body) {
       providerAllowedForBody(provider, body)
     ),
     body,
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || (source === "dm" && playerWaiting) || source === "scene" || isComment }
   );
 }
 

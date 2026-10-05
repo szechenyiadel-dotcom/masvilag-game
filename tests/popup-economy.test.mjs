@@ -22,7 +22,7 @@ test("Popups ask for their own 'popup' source, not the paid Scene chain", () => 
   assert.match(pick(["genPopupEventReroll"]), /foreground:true/);
   assert.match(pick(["genPopupCustomOutcome"]), /foreground:true/);
   assert.match(proxy, /source === "popup"\) \{[\s\S]{0,200}raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"\]/);
-  assert.match(proxy, /allowPaidBackground: AI_ALLOW_PAID_BACKGROUND \|\| source === "dm" \|\| source === "scene" \|\| isComment \}/, "background popups never get paid capacity");
+  assert.match(proxy, /allowPaidBackground: AI_ALLOW_PAID_BACKGROUND \|\| \(source === "dm" && playerWaiting\) \|\| source === "scene" \|\| isComment \}/, "background popups never get paid capacity");
 });
 
 function cadence() {
@@ -52,4 +52,19 @@ test("A failed popup generation waits longer each time instead of retrying every
   assert.match(source, /popupSim\.popupFailedAttempts = Math\.max\(0, Math\.round\(Number\(popupSim\.popupFailedAttempts\) \|\| 0\)\) \+ 1;/);
   assert.match(source, /sim\.lastPopupSuccessAt = ts; sim\.popupFailedAttempts = 0;/);
   assert.match(source, /if \(lastAttemptAt && now\(\) - lastAttemptAt < popupRetryWaitMs\(w\)\) return false;/);
+});
+
+test("Unprompted DMs: at most one every 4 minutes and 6 an hour; a 'text me' DM is never held back", () => {
+  const context = vm.createContext({ Math, Number, Array, now: () => 10 * 3600e3 });
+  vm.runInContext(pick(["RANDOM_DM_MIN_GAP_MS", "RANDOM_DM_HOURLY_MAX", "randomDmBudgetOpen"]), context);
+  const t = 10 * 3600e3;
+  assert.equal(context.randomDmBudgetOpen({}, t), true);
+  assert.equal(context.randomDmBudgetOpen({ lastAutonomousDmAt: t - 60e3 }, t), false, "one minute after the last");
+  assert.equal(context.randomDmBudgetOpen({ lastAutonomousDmAt: t - 5 * 60e3 }, t), true);
+  assert.equal(context.randomDmBudgetOpen({ lastAutonomousDmAt: t - 5 * 60e3, randomDmTimes: [1, 2, 3, 4, 5, 6].map((i) => t - i * 5 * 60e3) }, t), false, "six in the last hour");
+  const planner = pick(["fullSpecNextAutonomousDmAction"]);
+  assert.equal((planner.match(/if\(!budgetOpen&&!\/\^comment-dm-\/\.test\(String\(row\.trigger\|\|""\)\)\)continue;/g) || []).length, 2);
+  assert.match(source, /sim\.randomDmTimes = \[\.\.\.\(Array\.isArray\(sim\.randomDmTimes\)/);
+  assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,220}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"\]/);
+  assert.match(proxy, /\(source === "dm" && playerWaiting\)/);
 });
