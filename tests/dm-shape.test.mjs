@@ -20,6 +20,20 @@ test("R83: a DM written as {DM:{content}} / {type,content} / {message:{text}} ke
   assert.equal(norm("dm", { type: "DM", from: "a", content: "Stop playing games." }).reply, "Stop playing games.");
   assert.equal(norm("dm", { message: { text: "hey" } }).text, "hey");
   assert.deepEqual(norm("dm", { text: "same", skip: false }), { text: "same", skip: false, reply: "same" });
-  assert.deepEqual(norm("comments", { content: "x" }), { content: "x" }, "other sources untouched");
+  assert.deepEqual(norm("feed-post", { content: "x" }), { content: "x" }, "other sources untouched");
   assert.deepEqual(norm("dm", { skip: true }), { skip: true }, "a skip stays a skip");
+});
+
+test("R84: a COMMENT written by mistake is not turned into a DM; single comment replies under odd keys keep their line", () => {
+  assert.equal(norm("dm", { type: "COMMENT", author: "a", target: "b", content: "x" }).text, undefined);
+  assert.equal(norm("comments", { language: "en", response: "So what?" }).reply, "So what?");
+  assert.equal(norm("comments", { language: "en", content: "Come on." }).comment, "Come on.");
+  assert.equal(norm("comments", { language: "en", tandy_bowen_comments_reply: ["Come here."] }).reply, "Come here.");
+  assert.equal(norm("comments", { language: "en", authorization: "REDACTED", session_id: "9a", response: "fire" }).reply, "fire");
+  assert.deepEqual(norm("comments", { comments: [{ id: "a", text: "hi" }] }), { comments: [{ id: "a", text: "hi" }] });
+});
+
+test("R84: a DM the player asked for ('text me') is not held back by an open scene", () => {
+  assert.match(source, /commentAgreedDm \? "" :/);
+  assert.match(source, /if\(pausedFor&&!\/\^comment-dm-\/\.test\(String\(row\.trigger\|\|""\)\)\)continue;/);
 });
