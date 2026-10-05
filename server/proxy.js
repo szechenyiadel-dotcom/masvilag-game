@@ -5694,6 +5694,8 @@ function taskProviderOrder(requestedProvider, body) {
     /* R78: when every free one is out (Gemma 429, Nemotron daily cap, Gemini overloaded) a triggered DM ("text me",
        no follow-back, unfollow) still arrives through paid Venice — R71 already keeps these to a handful an hour. */
     raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"];
+    /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
+    if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
     /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
     raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];

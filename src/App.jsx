@@ -9031,7 +9031,22 @@ function withCommentTone(source, w, prompt, options) {
 /* R83: a DM answer in another shape — {"DM":{"content":…}}, {"type":"DM","content":…}, {"message":{"text":…}} — used to
    lose the line ("text me" DMs never arrived: Groq wrote "content", the app read "text"). The line is copied to text + reply. */
 function normalizeDmAnswerShape(source, out) {
-  if (String(source || "") !== "dm" || !out || typeof out !== "object" || Array.isArray(out)) return out;
+  if (!out || typeof out !== "object" || Array.isArray(out)) return out;
+  /* R84: a single comment reply under another key ({"response": …}, {"content": …}, {"x_reply": ["…"]}) keeps its line */
+  if (String(source || "") === "comments") {
+    if (Array.isArray(out.comments) || Array.isArray(out.replies) || ["reply", "comment", "text"].some((k) => typeof out[k] === "string" && out[k].trim())) return out;
+    const keys = Object.keys(out).filter((k) => !/^(?:language|skip|changes|events|selfUpdates|relationshipUpdates|authorization|session_id|id|targetId|replyTo|hangnem|tone)$/i.test(k));
+    let line = "";
+    for (const k of ["response", "content", "message", "answer", ...keys]) {
+      const v = out[k];
+      if (typeof v === "string" && v.trim()) { line = v.trim(); break; }
+      if (Array.isArray(v) && v.length && typeof v[0] === "string" && v[0].trim() && keys.length === 1) { line = v[0].trim(); break; }
+    }
+    return line ? { ...out, reply: line, comment: line, text: line } : out;
+  }
+  if (String(source || "") !== "dm") return out;
+  /* a COMMENT / post written by mistake (Groq on a cut-down prompt) is not a DM to the player */
+  if (/comment|post|reply/i.test(String(out.type || "")) || out.author || out.target) return out;
   const pick = (v) => (typeof v === "string" && v.trim() ? v.trim() : "");
   const nested = [out.dm, out.DM, out.message, out.reply, out.response].find((v) => v && typeof v === "object" && !Array.isArray(v)) || null;
   const line =
@@ -56540,7 +56555,8 @@ if (targetNote) {
     const rawDmPauseReason = eventDrivenAutonomousDmPauseReason(view);
     /* follow / unfollow reactions skip only the burst limit, not the scene / parallel-DM pause (5.5) */
     const dmPauseReason =
-      commentAgreedDm && rawDmPauseReason !== "scene-active" ? "" :
+      /* R84: the player ASKED for this DM ("text me") — it is not unsolicited, so an open scene does not hold it back */
+      commentAgreedDm ? "" :
       action && action.payload && ["follow-not-returned", "player-unfollowed"].includes(action.payload.trigger) && !["scene-active", "parallel-dms"].includes(rawDmPauseReason) ? "" : rawDmPauseReason;
     if (dmPauseReason) {
       update((n) => eventDrivenRememberDeferredDm(n, action, dmPauseReason));
@@ -62823,7 +62839,7 @@ function otherDmBudgetOpen(sim, at = now()) {
   const recent = (Array.isArray(sim && sim.otherDmTimes) ? sim.otherDmTimes : []).filter((t) => at - Number(t) < 3600e3);
   return recent.length < OTHER_DM_HOURLY_MAX;
 }
-function fullSpecNextAutonomousDmAction(view){if(!view||eventDrivenAutonomousDmPauseReason(view))return null;const sim=ensureSimState(view),state=fullSpecState(view),nowTs=now();const budgetOpen=otherDmBudgetOpen(sim,nowTs);const deferred=Object.values(sim.deferredAutonomousDms||{}).filter((row)=>row&&row.botId&&(!row.nextAt||Number(row.nextAt)<=nowTs)).sort((a,b)=>(Number(a.at)||0)-(Number(b.at)||0));for(const row of deferred){if(!charById(view,row.botId)||isHuman(view,row.botId)){delete sim.deferredAutonomousDms[row.botId];continue;}if(!budgetOpen&&!dmTriggerAlwaysAllowed(row.trigger)){delete sim.deferredAutonomousDms[row.botId];continue;}return mkAction("dm","deferred-dm:"+String(row.botId)+":"+String(row.eventId||row.at||nowTs),{botId:row.botId,trigger:row.trigger||"deferred-event",eventId:row.eventId||"",causeText:String(row.causeText||""),fullSpecDeferredKey:String(row.botId)},/^comment-dm-/.test(String(row.trigger||""))?"player-event":"event");}const pending=Object.values(state.pendingDmTriggers||{}).filter((row)=>row&&Number(row.nextAt||0)<=nowTs).sort((a,b)=>(Number(a.nextAt)||0)-(Number(b.nextAt)||0));for(const row of pending){if(!fullSpecPendingStillValid(view,row)){delete state.pendingDmTriggers[row.key];continue;}if(!budgetOpen&&!dmTriggerAlwaysAllowed(row.trigger)){delete state.pendingDmTriggers[row.key];continue;}return mkAction("dm","event-dm:"+row.key,{botId:row.botId,trigger:row.trigger||"social-event",eventId:row.eventId||"",fullSpecPendingKey:row.key},"event");}return null;}
+function fullSpecNextAutonomousDmAction(view){if(!view)return null;const pausedFor=eventDrivenAutonomousDmPauseReason(view);const sim=ensureSimState(view),state=fullSpecState(view),nowTs=now();const budgetOpen=otherDmBudgetOpen(sim,nowTs);const deferred=Object.values(sim.deferredAutonomousDms||{}).filter((row)=>row&&row.botId&&(!row.nextAt||Number(row.nextAt)<=nowTs)).sort((a,b)=>(Number(a.at)||0)-(Number(b.at)||0));for(const row of deferred){if(pausedFor&&!/^comment-dm-/.test(String(row.trigger||"")))continue;if(!charById(view,row.botId)||isHuman(view,row.botId)){delete sim.deferredAutonomousDms[row.botId];continue;}if(!budgetOpen&&!dmTriggerAlwaysAllowed(row.trigger)){delete sim.deferredAutonomousDms[row.botId];continue;}return mkAction("dm","deferred-dm:"+String(row.botId)+":"+String(row.eventId||row.at||nowTs),{botId:row.botId,trigger:row.trigger||"deferred-event",eventId:row.eventId||"",causeText:String(row.causeText||""),fullSpecDeferredKey:String(row.botId)},/^comment-dm-/.test(String(row.trigger||""))?"player-event":"event");}if(pausedFor)return null;const pending=Object.values(state.pendingDmTriggers||{}).filter((row)=>row&&Number(row.nextAt||0)<=nowTs).sort((a,b)=>(Number(a.nextAt)||0)-(Number(b.nextAt)||0));for(const row of pending){if(!fullSpecPendingStillValid(view,row)){delete state.pendingDmTriggers[row.key];continue;}if(!budgetOpen&&!dmTriggerAlwaysAllowed(row.trigger)){delete state.pendingDmTriggers[row.key];continue;}return mkAction("dm","event-dm:"+row.key,{botId:row.botId,trigger:row.trigger||"social-event",eventId:row.eventId||"",fullSpecPendingKey:row.key},"event");}return null;}
 function legacyGroundedPlanAutoAction(view){const deferredOrEventDm=fullSpecNextAutonomousDmAction(view);if(deferredOrEventDm)return deferredOrEventDm;return legacyFullSpecPlanAutoAction(view);}
 function fullSpecFinishDmTrigger(w,action,result,error=null){if(!w||!action||action.type!=="dm")return;const sim=ensureSimState(w),state=fullSpecState(w),deferredKey=String(action.payload&&action.payload.fullSpecDeferredKey||""),pendingKey=String(action.payload&&action.payload.fullSpecPendingKey||"");if(result==="dm-deferred"){if(pendingKey)delete state.pendingDmTriggers[pendingKey];return;}if(result){if(deferredKey&&sim.deferredAutonomousDms)delete sim.deferredAutonomousDms[deferredKey];if(pendingKey)delete state.pendingDmTriggers[pendingKey];return;}const retry=(row,drop)=>{if(!row)return;row.attempts=(Number(row.attempts)||0)+1;row.lastError=String(error&&error.message||error||"generation returned no DM").slice(0,220);row.nextAt=now()+FULL_SPEC_COMPLETION_SETTINGS.DEFERRED_DM_RETRY_MS;if(row.attempts>=FULL_SPEC_COMPLETION_SETTINGS.DEFERRED_DM_MAX_ATTEMPTS)drop();};if(deferredKey&&sim.deferredAutonomousDms&&sim.deferredAutonomousDms[deferredKey])retry(sim.deferredAutonomousDms[deferredKey],()=>delete sim.deferredAutonomousDms[deferredKey]);if(pendingKey&&state.pendingDmTriggers[pendingKey])retry(state.pendingDmTriggers[pendingKey],()=>delete state.pendingDmTriggers[pendingKey]);}
 async function legacyGroundedRunSimulationAction(view,update,action,addImage){let result=null;try{result=await legacyFullSpecRunSimulationAction(view,update,action,addImage);}catch(error){if(action&&action.type==="dm"&&action.payload&&(action.payload.fullSpecDeferredKey||action.payload.fullSpecPendingKey))update((n)=>fullSpecFinishDmTrigger(n,action,null,error));throw error;}if(action&&action.type==="dm"&&action.payload&&(action.payload.fullSpecDeferredKey||action.payload.fullSpecPendingKey))update((n)=>fullSpecFinishDmTrigger(n,action,result,null));return result;}
