@@ -5073,7 +5073,7 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
       : source === "dm" || source === "group-chat"
         ? Math.min(baseTimeout, 30000)
         : source === "comments"
-          /* R73: Nemotron often thinks past 25 s on a comment; a reply must reach the next provider in time */
+          /* R73: Nemotron often thought past 25 s on a comment (Ultra 550B); Super 120B answers in seconds */
           ? Math.min(baseTimeout, 15000)
           : source === "feed-post"
           ? Math.min(baseTimeout, 25000)
@@ -5223,7 +5223,7 @@ function providerModel(provider, body = {}) {
   if (provider === "openrouter-dm-venice") {
     return "cognitivecomputations/dolphin-mistral-24b-venice-edition";
   }
-  if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim();
+  if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-super-120b-a12b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
   if (provider === "gemini") {
