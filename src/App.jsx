@@ -29994,7 +29994,7 @@ function legacyChannelApplyWorldStep(n, out) {
     const authorChar = charById(n, author);
     if (!authorChar) { feedPostDropLog(n, author, "unknown-author"); return; }
     if (!EVENT_DRIVEN_FEED_APPLYING && !characterCanAutonomouslyPost(n, authorChar)) return;
-    const postText = cleanGeneratedUtterance(n, author, stripSocialRoleplayNarration(n, author, p.text), 700);
+    const postText = cleanGeneratedUtterance(n, author, keepFakeDatingSecretInPublic(stripSocialRoleplayNarration(n, author, p.text)), 700);
     if (!postText) { feedPostDropLog(n, author, "empty-or-filtered-text"); return; }
     if (socialSelfClassificationContradiction(n, author, postText)) { feedPostDropLog(n, author, "self-classification-contradiction"); return; }
 
@@ -30031,7 +30031,7 @@ function legacyChannelApplyWorldStep(n, out) {
     safePostComments(p).forEach((c, idx) => {
       const cid = aiVoice(n, c && (c.id !== undefined ? c.id : c.name));
       if (!cid || !c.text) return;
-      const body = cleanGeneratedUtterance(n, cid, stripSocialRoleplayNarration(n, cid, c.text), 240);
+      const body = cleanGeneratedUtterance(n, cid, keepFakeDatingSecretInPublic(stripSocialRoleplayNarration(n, cid, c.text)), 240);
       if (!body) return;
       if (socialSelfClassificationContradiction(n, cid, body)) return;
 
@@ -63115,12 +63115,29 @@ function stripSocialRoleplayNarration(w, id, value) {
   return noActs;
 }
 
+/* R95 (owner's rule): fake dating is a SECRET — in public text (comments, posts) nobody calls the couple fake.
+   "the fake girlfriend" → "the girlfriend", "pretending to date" → "dating"; private DMs are untouched. */
+function keepFakeDatingSecretInPublic(value) {
+  let text = String(value || "");
+  if (!text) return text;
+  text = text
+    .replace(/\b(?:fake|pretend|fauxe?|so[- ]called)[- ](girlfriend|boyfriend|gf|bf|couple|relationship|romance|wife|husband|partner|lovers?)\b/gi, "$1")
+    .replace(/\bfake[- ]?dat(?:ing|e)\b/gi, "dating")
+    .replace(/\bpretend(?:ing)? to (?:date|be (?:a )?couple|be together)\b/gi, (m) => /ing/i.test(m) ? "dating" : "date")
+    .replace(/\b(?:kamu|ál|álságos|színlelt)[- ]?(barátnő|barát|pasi|csaj|pár|kapcsolat|szerelem|házaspár)/gi, "$1")
+    .replace(/\bálkapcsolat/gi, "kapcsolat")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return text;
+}
+
 function cleanGeneratedComment(...args) {
   const w = args[0];
   const id = args[1];
   args[2] = normalizeGeneratedSocialText(args[2]);
   if (!args[2]) return "";
   try { args[2] = stripSocialRoleplayNarration(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
+  try { args[2] = keepFakeDatingSecretInPublic(args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try { args[2] = stripForeignGroupClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try { args[2] = stripUnfoundedPossessiveClaims(w, id, args[2]); if (!args[2]) return ""; } catch (error) { /* keep */ }
   try {
@@ -65156,10 +65173,10 @@ function fakeDatingBehaviorCard(w, actorId, targetId) {
   const nature = [actor.personality, actor.traits, actor.extra, actor.speech].filter(Boolean).join(" ");
   const guarded = /fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|egyéjszakás|nem randizik|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
   return en
-    ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. Never reveal publicly that it is fake." +
+    ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. Never reveal publicly that it is fake — no 'fake girlfriend', 'our little act', 'pretend couple' in a comment or post, not even as a joke or a jab: to everyone else you are simply together." +
       " In private (DMs, scenes with only the two of you) the real feelings" + (real ? " (" + real + ")" : "") + " only LEAK — a look held too long, jealousy you deny, staying longer than the deal needs, a softer moment you immediately joke away. Liking them or wanting them is fine to show; ADMITTING that you feel more, that it is not fake for you any more, does not happen in an ordinary DM: you deflect ('it's part of the act', 'don't flatter yourself', a joke, a flirt, a change of subject) and get colder if pressed. If they say you are good at faking it, you take the bait as a compliment or a challenge ('I'm good at everything') — you do NOT answer 'I'm not faking', 'I mean every word' or anything that says the feelings are real. You also never push to make it real ('commit for real', 'act like a real girlfriend / boyfriend', 'are you scared to make it real') — the deal stays the deal, you only tease about the act." +
       (guarded ? " You are the player / commitment-shy type: admitting real feelings is the LAST thing you would do — only after many significant moments, under real pressure (jealousy, almost losing them), and even then half-said and taken back." : "")
-    : "ÁLKAPCSOLAT " + target + " FELÉ: ti ketten csak ELJÁTSSZÁTOK, hogy egy pár vagytok. Nyilvánosan (posztok, kommentek, közös események) tartsátok fenn a látszatot — páros viselkedés, becenevek, a „kapcsolat” védelme, partnerként reagálás. Nyilvánosan soha ne áruld el, hogy kamu." +
+    : "ÁLKAPCSOLAT " + target + " FELÉ: ti ketten csak ELJÁTSSZÁTOK, hogy egy pár vagytok. Nyilvánosan (posztok, kommentek, közös események) tartsátok fenn a látszatot — páros viselkedés, becenevek, a „kapcsolat” védelme, partnerként reagálás. Nyilvánosan soha ne áruld el, hogy kamu — se „kamu barátnő”, se „a kis színjátékunk” kommentben vagy posztban, még viccből vagy szurkálódásként sem: mindenki más szemében egyszerűen együtt vagytok." +
       " Privátban (DM, kettesben zajló jelenet) a valódi érzéseid" + (real ? " (" + real + ")" : "") + " csak KISZIVÁROGNAK — egy túl hosszú pillantás, letagadott féltékenység, tovább maradsz, mint ami a deal része, egy lágyabb pillanat, amit azonnal elviccelsz. Hogy tetszik vagy kívánod, az látszhat; BEVALLANI, hogy többet érzel, hogy neked már nem kamu, egy hétköznapi DM-ben nem fogod: terelsz („ez a szerep része”, „ne képzeld”, poén, flört, témaváltás), és ha erőltetik, hidegebb leszel. Ha azt mondja, jól megy neked a kamuzás, bókként vagy kihívásként veszed („mindenben jó vagyok”) — NEM mondod, hogy „nem kamuzok”, „minden szavamat komolyan gondolom”, vagy bármit, ami szerint az érzéseid valódiak. Azt sem erőlteted, hogy legyen valódi („vállald fel igazából”, „viselkedj igazi barátnőként / pasiként”, „félsz komolyan venni?”) — a deal az deal, csak a szerepjátékkal ugratod." +
       (guarded ? " Te a csajozós / elköteleződéstől menekülő típus vagy: az érzéseid bevallása az utolsó, amit megtennél — csak sok jelentős pillanat után, valódi nyomás alatt (féltékenység, majdnem elveszíted), és akkor is félig kimondva, visszavonva." : "");
 }

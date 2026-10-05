@@ -65,3 +65,15 @@ test("R90: 'text me' DMs are queued even though the saved world has no meId", ()
   assert.match(source, /enqueueCommentAgreedDm\(n, botId, \{ kind: "request", playerId: freshActorId,/);
   assert.match(source, /STAY IN THIS LANE — /);
 });
+
+test("R95: fake dating stays secret in public comments and posts", () => {
+  const ctx = vm.createContext({ String, RegExp });
+  vm.runInContext(pick(["keepFakeDatingSecretInPublic"]), ctx);
+  const k = (t) => ctx.keepFakeDatingSecretInPublic(t);
+  assert.equal(k("Well, well, if it isn't the fake girlfriend. How's that going for you, Tandy?"), "Well, well, if it isn't the girlfriend. How's that going for you, Tandy?");
+  assert.equal(k("Still pretending to date him?"), "Still dating him?");
+  assert.equal(k("Hogy megy a kamu barátnősködés?"), "Hogy megy a barátnősködés?");
+  assert.equal(k("Nice shot, babe."), "Nice shot, babe.");
+  assert.match(source, /keepFakeDatingSecretInPublic\(args\[2\]\)/);
+  assert.match(source, /keepFakeDatingSecretInPublic\(stripSocialRoleplayNarration\(n, author, p\.text\)\)/);
+});
