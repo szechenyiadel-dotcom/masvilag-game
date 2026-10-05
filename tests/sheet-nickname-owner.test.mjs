@@ -77,3 +77,27 @@ test("hush: every old screen stays reachable (phone menu + Me links)", () => {
   assert.match(source, /onGo\("world"\)/);
   assert.match(source, /onGo\("bonds"\)/);
 });
+
+test("R88: a pet name the raw sheet gives to someone else is never used on the player, even mid-text", () => {
+  const people = { tandy: { id: "tandy", name: "Tandy Bowen" }, nir: { id: "nir", name: "Niragi", personality: "Sadistic. His ex Lily — he still calls her babydoll and gets violent about it.", extra: "Cold." } };
+  const context = vm.createContext({
+    Math, String, Set, RegExp, Array, Object, Map,
+    charById: (w, id) => people[id],
+    preferredDirectAddressForCharacter: () => "Tandy",
+    directAddressAliasesForCharacter: (p) => p ? [p.name, p.name.split(" ")[0]] : [],
+    allGossipMediaAccounts: () => [],
+    characterBibleFor: () => null,
+    nicknamesUsedBy: () => [],
+    nicknameMatchesPerson: () => false,
+    regexEscapeLiteral: (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  });
+  vm.runInContext(pick(["HUSH_PET_NAMES", "SHEET_FOREIGN_NAME_CACHE", "sheetForeignNamesFor", "sanitizeWrongCharacterVocative"]), context);
+  assert.ok(context.sheetForeignNamesFor(people.nir, people.tandy).includes("babydoll"));
+  const clean = (t) => context.sanitizeWrongCharacterVocative({ player: people.tandy, chars: [people.nir] }, "nir", "tandy", t);
+  assert.equal(clean("Keep laughing, babydoll. Makes it so much more fun."), "Keep laughing, Tandy. Makes it so much more fun.");
+  assert.equal(clean("Still pretending you're having fun without me, babydoll? You know where to find me."), "Still pretending you're having fun without me, Tandy? You know where to find me.");
+  assert.equal(clean("Babydoll, you're always so predictable."), "Tandy, you're always so predictable.");
+  assert.equal(clean("Come closer, babydoll."), "Come closer, Tandy.");
+  const near = { id: "b", name: "Brent", personality: "Calls Tandy babydoll to annoy her." };
+  assert.ok(!context.sheetForeignNamesFor(near, people.tandy).includes("babydoll"), "a pet name the sheet gives to the player stays");
+});
