@@ -3724,7 +3724,10 @@ function stripUnfoundedPossessiveClaims(w, speakerId, text) {
     try { stake = romanticStakeForObserver(w, speakerId, id); } catch (error) { stake = null; }
     return Boolean(stake && (stake.stake >= 3 || stake.label === "romantic-fixation" || (Number(stake.jealousy) || 0) >= 4));
   });
-  if (entitled) return value;
+  /* R93: a player / fuckboy type never makes a "mine" claim, whatever the stake */
+  let playerType = false;
+  try { playerType = Boolean(playerTypeDirective(w, charById(w, speakerId))); } catch (error) { playerType = false; }
+  if (entitled && !playerType) return value;
   const kept = value.split(/(?<=[.!?…])\s+/).filter((part) => !POSSESSIVE_CLAIM_RE.test(straight(part))).join(" ").trim();
   console.info("[possessive] removed a 'mine' claim from someone who is not with / possessive about anyone", "speaker=" + speakerId, value.slice(0, 120));
   return kept;
@@ -30850,6 +30853,25 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       });
     });
 
+    /* R93: "text me" written in the player's own post — the people tagged, or else the one closest to the player, write */
+    if (COMMENT_DM_REQUEST_RE.test(String(t || ""))) {
+      update((n) => {
+        try {
+          const playerId = w.meId;
+          const tagged = (namedPeopleInText(n, t, playerId) || []).filter((id) => id && id !== playerId && !isHuman(n, id) && !isMediaAccount(n, id));
+          let askIds = tagged.slice(0, 2);
+          if (!askIds.length) {
+            const closest = (n.chars || [])
+              .filter((c) => c && c.id && !isHuman(n, c.id) && !isMediaAccount(n, c.id))
+              .map((c) => { const r = getRel(n, c.id, playerId) || EMPTY_REL; return { id: c.id, w: (Number(r.score) || 0) + (Number(r.attraction) || 0) * 0.5 }; })
+              .sort((a, b) => b.w - a.w)[0];
+            if (closest) askIds = [closest.id];
+          }
+          askIds.forEach((botId) => enqueueCommentAgreedDm(n, botId, { kind: "request", playerId, commentId: "post-" + p.id, playerText: t, postAuthorName: w.player.name }));
+        } catch (error) { console.warn("[post-dm] request failed", error); }
+      });
+    }
+
     if (onSignal) {
       onSignal({
         type: "player-post",
@@ -37583,7 +37605,8 @@ function directDmProtectedTail(w, c, ck, latestText) {
     "- Relationship level and personality decide HOW you react (embarrassed, pleased, teasing, defensive, sarcastic, possessive, calm, etc.), never WHETHER you acknowledge what was just said.\n" +
     "- Do not repeat the same opening, image, threat, joke, metaphor, pet name pattern or distinctive 4+ word phrase from your recent DM messages.\n" +
     "- Reply in the language of this DM conversation/latest player message: English conversation -> natural English; Hungarian conversation -> natural correct Hungarian, except character-sheet style rules intentionally overriding spelling/punctuation/casing.\n" +
-    "- Keep the exact JSON response schema requested earlier in the prompt.\n\n" +
+    "- Keep the exact JSON response schema requested earlier in the prompt.\n" +
+    "- NOTHING INVENTED: mention only what is in this DM history, the world record above or your own sheet. No made-up conversations, no one else texting the player, no places they supposedly went, no rumours that did not happen. If you do not know, ask — do not assume.\n\n" +
     clarification +
     emotionTrigger +
     fakeDatingLane +
@@ -42267,7 +42290,7 @@ function markSimulationCadence(w, action) {
     sim.lastAutonomousDmAt = ts;
     /* R71: only DMs from "other" reasons use up the one-per-hour budget */
     if (!dmTriggerAlwaysAllowed(action.payload && action.payload.trigger)) {
-      sim.otherDmTimes = [...(Array.isArray(sim.otherDmTimes) ? sim.otherDmTimes : []).filter((t) => ts - Number(t) < 3600e3), ts].slice(-10);
+      sim.otherDmTimes = [...(Array.isArray(sim.otherDmTimes) ? sim.otherDmTimes : []).filter((t) => ts - Number(t) < 24 * 3600e3), ts].slice(-10);
     }
   }
   if (action && action.type === "popup-event") { sim.lastPopupSuccessAt = ts; sim.popupFailedAttempts = 0; }
@@ -57182,6 +57205,16 @@ if (targetNote) {
     if (!commentAgreedDm && !autonomousDmEligible(view, bot)) {
       return null;
     }
+    /* R93: every queued unprompted DM (jealousy, ignored DM, gossip, tag…) goes through the daily budget too —
+       only "text me", no follow-back and unfollow are always allowed */
+    {
+      const dmTrigger = String(action.payload && action.payload.trigger || "");
+      const followBack = Boolean(action.payload && action.payload.groundedFollowBackBotId);
+      if (!followBack && !dmTriggerAlwaysAllowed(dmTrigger) && !otherDmBudgetOpen(ensureSimState(view), now())) {
+        console.info("[dm-budget] skipped", "bot=" + String(bot.id), "trigger=" + (dmTrigger || "none"));
+        return null;
+      }
+    }
 
     const rawDmPauseReason = eventDrivenAutonomousDmPauseReason(view);
     /* follow / unfollow reactions skip only the burst limit, not the scene / parallel-DM pause (5.5) */
@@ -62753,7 +62786,8 @@ function playerTypeDirective(w, c) {
   const name = String(c.name || "").toUpperCase();
   return "PLAYER TYPE — " + name + " (FROM THEIR OWN SHEET): cocky, charming, flirts easily and with more than one person, keeps everything light and casual. " +
     "Never clingy, never possessive: no \"you're mine\", no \"I can't stand sharing\", no jealous interrogations about who they talk to — if something bothers " + name + ", it shows as a cocky jab or a provocation while acting unbothered. " +
-    "Real feelings stay hidden behind jokes and flirting; talk of commitment or feelings makes " + name + " deflect or back off.";
+    "Real feelings stay hidden behind jokes and flirting; talk of commitment or feelings makes " + name + " deflect or back off. " +
+    "A mood recorded earlier as possessive or jealous does not change who " + name + " is — it shows only as a cocky remark.";
 }
 
 function extremeNatureText(w, c) {
@@ -63573,12 +63607,14 @@ function fullSpecPendingStillValid(w,row){if(!w||!row||!row.botId||!charById(w,r
    did not follow back, or unfollowed the character — and from every other reason (gossip, jealousy, being
    ignored, a tag, ...) at most ONE in a rolling hour. Over that budget the other DM simply does not happen. */
 const DM_ALWAYS_ALLOWED_TRIGGER_RE = /^(?:comment-dm-|follow-not-returned$|player-unfollowed$|popup-)/;
+/* R93 (owner's rule): every other unprompted DM — at most ONE a day (rolling 24 hours). */
 const OTHER_DM_HOURLY_MAX = 1;
+const OTHER_DM_WINDOW_MS = 24 * 3600e3;
 function dmTriggerAlwaysAllowed(trigger) {
   return DM_ALWAYS_ALLOWED_TRIGGER_RE.test(String(trigger || ""));
 }
 function otherDmBudgetOpen(sim, at = now()) {
-  const recent = (Array.isArray(sim && sim.otherDmTimes) ? sim.otherDmTimes : []).filter((t) => at - Number(t) < 3600e3);
+  const recent = (Array.isArray(sim && sim.otherDmTimes) ? sim.otherDmTimes : []).filter((t) => at - Number(t) < OTHER_DM_WINDOW_MS);
   return recent.length < OTHER_DM_HOURLY_MAX;
 }
 function fullSpecNextAutonomousDmAction(view){if(!view)return null;const pausedFor=eventDrivenAutonomousDmPauseReason(view);const sim=ensureSimState(view),state=fullSpecState(view),nowTs=now();const budgetOpen=otherDmBudgetOpen(sim,nowTs);const deferred=Object.values(sim.deferredAutonomousDms||{}).filter((row)=>row&&row.botId&&(!row.nextAt||Number(row.nextAt)<=nowTs)).sort((a,b)=>(Number(a.at)||0)-(Number(b.at)||0));for(const row of deferred){if(pausedFor&&!/^comment-dm-/.test(String(row.trigger||"")))continue;if(!charById(view,row.botId)||isHuman(view,row.botId)){delete sim.deferredAutonomousDms[row.botId];continue;}if(!budgetOpen&&!dmTriggerAlwaysAllowed(row.trigger)){delete sim.deferredAutonomousDms[row.botId];continue;}return mkAction("dm","deferred-dm:"+String(row.botId)+":"+String(row.eventId||row.at||nowTs),{botId:row.botId,trigger:row.trigger||"deferred-event",eventId:row.eventId||"",causeText:String(row.causeText||""),fullSpecDeferredKey:String(row.botId)},/^comment-dm-/.test(String(row.trigger||""))?"player-event":"event");}if(pausedFor)return null;const pending=Object.values(state.pendingDmTriggers||{}).filter((row)=>row&&Number(row.nextAt||0)<=nowTs).sort((a,b)=>(Number(a.nextAt)||0)-(Number(b.nextAt)||0));for(const row of pending){if(!fullSpecPendingStillValid(view,row)){delete state.pendingDmTriggers[row.key];continue;}if(!budgetOpen&&!dmTriggerAlwaysAllowed(row.trigger)){delete state.pendingDmTriggers[row.key];continue;}return mkAction("dm","event-dm:"+row.key,{botId:row.botId,trigger:row.trigger||"social-event",eventId:row.eventId||"",fullSpecPendingKey:row.key},"event");}return null;}
