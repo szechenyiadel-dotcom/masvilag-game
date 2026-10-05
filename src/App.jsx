@@ -9484,7 +9484,36 @@ function withCommentTone(source, w, prompt, options) {
 
 /* R83: a DM answer in another shape — {"DM":{"content":…}}, {"type":"DM","content":…}, {"message":{"text":…}} — used to
    lose the line ("text me" DMs never arrived: Groq wrote "content", the app read "text"). The line is copied to text + reply. */
+/* R96: a scene answer whose lines come under another key ({"dialogue":[…]}, {"scene":{"turns":[…]}}, a bare array,
+   {"character":"Brent","line":"…"}) keeps its lines instead of stopping the scene. */
+function normalizeSceneAnswerShape(out) {
+  const rowOf = (t) => {
+    if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+    const pick = (...keys) => { for (const k of keys) { const v = t[k]; if (typeof v === "string" && v.trim()) return v.trim(); } return ""; };
+    const text = pick("text", "content", "line", "dialogue", "message", "speech", "action", "narration", "reply");
+    if (!text) return null;
+    const id = t.id !== undefined && t.id !== null && String(t.id).trim() ? t.id : pick("name", "character", "speaker", "author", "who", "characterId", "character_id") || (t.narration ? "narrator" : "");
+    if (!id) return null;
+    return { ...t, id, text, kind: t.kind || (typeof t.action === "string" && !t.text ? "action" : t.type === "action" ? "action" : t.kind) };
+  };
+  const rowsOf = (arr) => (Array.isArray(arr) ? arr.map(rowOf).filter(Boolean) : []);
+  if (Array.isArray(out)) { const rows = rowsOf(out); return rows.length ? { turns: rows } : out; }
+  if (!out || typeof out !== "object") return out;
+  if (Array.isArray(out.turns) && out.turns.length) {
+    const rows = rowsOf(out.turns);
+    return rows.length ? { ...out, turns: rows } : out;
+  }
+  const nested = out.scene && typeof out.scene === "object" ? out.scene : (out.roleplay && typeof out.roleplay === "object" ? out.roleplay : null);
+  for (const arr of [nested && nested.turns, out.dialogue, out.lines, out.responses, out.messages, out.replies, out.reply, out.script, nested && nested.dialogue]) {
+    const rows = rowsOf(arr);
+    if (rows.length) return { ...out, turns: rows };
+  }
+  if (!Array.isArray(out.turns)) { const single = rowOf(out); if (single && !out.summary) return { ...out, turns: [single] }; }
+  return out;
+}
+
 function normalizeDmAnswerShape(source, out) {
+  if (String(source || "") === "scene") { try { return normalizeSceneAnswerShape(out); } catch (error) { return out; } }
   if (!out || typeof out !== "object" || Array.isArray(out)) return out;
   /* R84: a single comment reply under another key ({"response": …}, {"content": …}, {"x_reply": ["…"]}) keeps its line */
   if (String(source || "") === "comments") {
@@ -35572,6 +35601,16 @@ JSON ONLY:
       }
 
       if (!resolved.length) {
+        /* R96: say on the server what the answer looked like, so a stuck scene can be diagnosed */
+        try {
+          const turnsIn = out && Array.isArray(out.turns) ? out.turns : [];
+          reportClientDiag("scene-stuck", {
+            keys: out && typeof out === "object" ? Object.keys(out).slice(0, 12).join(",") : typeof out,
+            turns: turnsIn.length,
+            ids: turnsIn.slice(0, 6).map((t) => String(t && (t.id !== undefined ? t.id : t.name) || "?").slice(0, 30)).join("|"),
+            sample: String(turnsIn[0] && turnsIn[0].text || "").slice(0, 160),
+          });
+        } catch (error) { /* diagnostics only */ }
         throw new Error(
           tt(
             "Az AI kétszer is csak ismétlődő vagy hibás szereplőhöz tartozó választ adott. Próbáld újra — a jelenet és a memóriák megmaradtak.",
