@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import {
   isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN, planGroqRequest,
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
-  createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson,
+  createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, salvageSingleFieldJson,
   PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter, createRefusalTracker, orderByRefusals,
 } from "../server/aiPolicy.js";
 
@@ -37,7 +37,7 @@ function gate(env, scripted) {
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
-    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, createRefusalTracker, orderByRefusals,
+    isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, salvageSingleFieldJson, createRefusalTracker, orderByRefusals,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
   vm.runInContext(pick(NAMES), context);

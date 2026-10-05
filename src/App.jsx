@@ -60000,7 +60000,8 @@ const signOut = useCallback(async () => {
       try {
         laneOk = Boolean(await runSimulationAction(viewRef.current, update, laneAction, addImage));
       } catch (e) {
-        if (alive) setErr("SIM: " + ((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed.")));
+        /* R80: "waiting for free capacity" is retried by itself — no red banner for it */
+        if (alive && !(e && e.waiting)) setErr("SIM: " + ((e && e.message) ? e.message : tt("Az AI-kérés nem sikerült.", "AI request failed.")));
       }
       const laneWaiting = !laneOk && AI.waitingAt >= laneStartedAt;
       update((n) => {
@@ -60346,7 +60347,7 @@ const signOut = useCallback(async () => {
         if (action && action.source !== "manual" && action.source !== "player-event" && !(e && e.waiting) && simBrakeNoteFailure()) {
           update((n) => groundedEventLog(n, "sim-brake", "applied", "Background world paused for 5 minutes after repeated AI failures: " + String(e && e.message || e || "error").slice(0, 160), "brake"));
         }
-        if (action && action.source === "manual" && alive) {
+        if (action && action.source === "manual" && alive && !(e && e.waiting)) {
           setErr(
   "SIM: " +
   (
