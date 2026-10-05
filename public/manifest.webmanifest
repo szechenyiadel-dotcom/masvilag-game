@@ -1,0 +1,12 @@
+{
+  "name": "hush",
+  "short_name": "hush",
+  "description": "hush — a world that whispers back.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040906",
+  "theme_color": "#040906",
+  "icons": [
+    { "src": "/hush-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
