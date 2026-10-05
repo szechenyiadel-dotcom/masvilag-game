@@ -258,3 +258,30 @@ test("proxy.js gives the vision runner the picture models and the shared ledger"
   assert.match(source, /geminiModels: GEMINI_MODELS\.vision/);
   assert.match(source, /ledger: GEMINI_LEDGER/);
 });
+
+test("R82: with Groq unusable, OpenRouter's free vision models read the picture before Gemini; a busy one rests", async () => {
+  const models = ["qwen/qwen3.8-27b:free", "google/gemma-4-26b-a4b-it:free"];
+  const t = setup((c) => {
+    if (c.host === "api.groq.com") return quota();
+    if (c.host === "openrouter.ai") return c.body.model === models[0] ? quota() : groqOk("A woman in a red bikini taking a mirror selfie by the pool.");
+    return geminiOk();
+  }, { openRouter: { key: "or2", models } });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.deepEqual([result.ok, result.provider, result.model], [true, "openrouter", models[1]]);
+  assert.match(result.text, /bikini/);
+  const or = t.calls.filter((c) => c.host === "openrouter.ai");
+  assert.deepEqual(or.map((c) => c.body.model), models);
+  assert.equal(or[0].key, "or2");
+  assert.deepEqual(or[0].body.messages[0].content.map((p) => p.type), ["text", "image_url"]);
+  assert.ok(!t.calls.some((c) => c.host === "generativelanguage.googleapis.com"), "Gemini not needed");
+  t.calls.length = 0;
+  await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.deepEqual(t.calls.filter((c) => c.host === "openrouter.ai").map((c) => c.body.model), [models[1]], "the busy model rests for a minute");
+});
+
+test("R82: the post-image prompt names the outfit exactly (bikini, lingerie, shirtless...)", () => {
+  const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.equal((app.match(/Name the outfit EXACTLY \(e\.g\. bikini, swimsuit, lingerie/g) || []).length, 2);
+  const proxy = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+  assert.match(proxy, /openRouter: \{\n\s+key: process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
+});
