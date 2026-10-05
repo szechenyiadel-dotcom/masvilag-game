@@ -15153,6 +15153,44 @@ function sanitizeWrongCharacterVocative(w, actorId, targetId, value) {
     });
   });
 
+  /* R77: a name or pet name from the speaker's OWN sheet belongs to the person it names there ("Babydoll" is that girl,
+     not the player). Unless the sheet also gives that name to THIS target, it is never used to address the target. */
+  const sheetForeignAliases = [];
+  try {
+    const bible = characterBibleFor(w, actorId);
+    const usedForTarget = new Set(nicknamesUsedBy(w, actorId, targetId).map((x) => String(x.nickname || "").toLowerCase()));
+    const addForeign = (raw, maxWords) => {
+      const alias = String(raw || "").replace(/["“”'‘’]/g, "").replace(/\s+/g, " ").trim();
+      const low = alias.toLowerCase();
+      if (alias.length < 3 || alias.length > 30 || alias.split(" ").length > maxWords) return;
+      if (targetAliases.has(low) || actorAliases.has(low) || usedForTarget.has(low)) return;
+      if (wrongAliases.some((x) => x.toLowerCase() === low)) return;
+      wrongAliases.push(alias);
+      sheetForeignAliases.push(alias);
+    };
+    (bible && Array.isArray(bible.callsOthers) ? bible.callsOthers : []).forEach((x) => {
+      if (!x || nicknameMatchesPerson(x.person, target)) return;
+      addForeign(x.nickname, 3);
+      addForeign(x.person, 3);
+    });
+    (bible && Array.isArray(bible.people) ? bible.people : []).forEach((x) => {
+      if (!x || !x.name || nicknameMatchesPerson(x.name, target)) return;
+      addForeign(x.name, 3);
+    });
+  } catch (error) { /* the character bible is optional */ }
+
+  sheetForeignAliases.forEach((alias) => {
+    const escaped = regexEscapeLiteral(alias);
+    text = text.replace(
+      new RegExp(`\\b(hey|yo|hi|hello|bye|night|morning|szia|hé)\\s+(?:my\\s+)?(?:${escaped})(?![\\p{L}\\p{N}])`, "giu"),
+      (_m, greeting) => replacement ? `${greeting} ${replacement}` : greeting
+    );
+    text = text.replace(
+      new RegExp(`,\\s*(?:my\\s+)?(?:${escaped})\\s*,`, "gi"),
+      replacement ? `, ${replacement},` : ","
+    );
+  });
+
   wrongAliases
     .sort((a, b) => b.length - a.length)
     .forEach((alias) => {
@@ -17428,6 +17466,22 @@ function migrate(w) {
     if (r.why === undefined) r.why = "";
     if (!r.bond && r.type) { r.bond = r.type; r.fixed = FIXED_BONDS.indexOf(r.type) >= 0; r.type = ""; }
   });
+
+  /* R77: a jealousy mood left behind by the old "relationship = partner" misread is cleared once, when the
+     observer has no real romantic stake in that person. */
+  if (!w.falseJealousyMoodCleanupV1) {
+    const jealousMoods = /^(?:strongly jealous|possessive and angry|deeply hurt and jealous|jealous|hurt and distrustful|feels slighted|erősen féltékeny|birtoklóan dühös|mélyen megbántott és féltékeny|féltékeny|sértett és bizalmatlan|megbántva érzi magát)$/i;
+    Object.keys(w.rels).forEach((k) => {
+      const r = w.rels[k];
+      if (!r || !jealousMoods.test(String(r.mood || "").trim())) return;
+      const [observerId, subjectId] = k.split(">");
+      if (!observerId || !subjectId || isHuman(w, observerId)) return;
+      let stake = null;
+      try { stake = romanticStakeForObserver(w, observerId, subjectId); } catch (error) { stake = { keep: true }; }
+      if (!stake) r.mood = "";
+    });
+    w.falseJealousyMoodCleanupV1 = 1;
+  }
 
   /*
    * v99 PERFORMANCE: migrate() runs on login, saves, conflict responses and
@@ -49380,7 +49434,9 @@ function romanticStakeForObserver(w, observerId, subjectId) {
   let stake = 0;
   let label = "";
 
-  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|partner|dating|together|lover|relationship|járnak|párja|pasija|csaja|szerelme|jegyes|házastárs)\b/i.test(corpus)) {
+  /* R77: plain "relationship" / "together" / "partner" are not romance — a friend summary ("their relationship is
+     amicable", "they train together", "sparring partner") made a straight friend "possessive and angry". */
+  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|dating|lover|járnak|párja|pasija|csaja|szerelme|jegyes|házastárs)\b|\b(?:romantic|life|domestic)\s+partner\b|\b(?:in\s+a|romantic|sexual|secret)\s+relationship\b|\b(?:are|got|been|back|living)\s+together\b/i.test(corpus)) {
     stake = 4; label = "partner";
   } else if (/\b(?:situationship|hooking\s*up|hookup|friends?\s+with\s+benefits|fwb|secret\s+affair|affair|titkos\s+viszony|kavar|kavarnak|összejár)\b/i.test(corpus)) {
     stake = 3; label = "involved";
@@ -54300,7 +54356,7 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
     calls += 1;
     try {
       playerPostCommentDiagnostic(view, post, "ai-call", { call: calls, providerRequest: "starting" });
-      const generated = await genComments(view, post, { minComments: 3, maxComments: 6, playerPostContentIsolation: true });
+      const generated = await genComments(view, post, { minComments: 5, maxComments: 8, playerPostContentIsolation: true });
       label = String(generated && generated.label || label || "");
       const out = generated && generated.out && typeof generated.out === "object" ? generated.out : {};
       const rows = playerPostUsableCommentRows(view, out);
@@ -58921,7 +58977,7 @@ const signOut = useCallback(async () => {
         mkAction(
           "player-post-comments-guarantee",
           `player-post-comments:${event.postId}`,
-          { postId: event.postId, trigger: "player-post", requireHumanAuthor: true, minComments: 3, maxComments: 6, playerPostContentIsolation: true },
+          { postId: event.postId, trigger: "player-post", requireHumanAuthor: true, minComments: 5, maxComments: 8, playerPostContentIsolation: true },
           "manual"
         )
       );
@@ -63064,7 +63120,8 @@ function playerPostCommentBatchProblems(w, rows, cards, postContext, minComments
   const problems = [];
   const rawRows = Array.isArray(rows) ? rows : [];
 
-  if (rawRows.length < Math.max(2, Number(minComments) || 2)) {
+  /* R77: the prompt asks for 5-8; only a batch well short of that is retried (a retry doubles the cost) */
+  if (rawRows.length < Math.max(2, (Number(minComments) || 2) - 2)) {
     problems.push("too-few-valid-comments");
   }
 
@@ -63230,10 +63287,11 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
 }
 
 async function isolatedPlayerPostComments(w, post, options = {}) {
-  const minComments = Math.max(3, Math.min(6, Math.round(Number(options.minComments) || 3)));
-  const maxComments = Math.max(minComments, Math.min(6, Math.round(Number(options.maxComments) || 6)));
+  /* R77: more comments under the player's post — 5-8 instead of 3-6 (never more than the people who can comment) */
+  const maxComments = Math.max(5, Math.min(8, Math.round(Number(options.maxComments) || 8)));
   const postContext = playerPostCommentPostContext(w, post);
   const cards = playerPostCommentCandidateCards(w, post, maxComments);
+  const minComments = Math.max(1, Math.min(cards.length || 1, maxComments, Math.max(3, Math.round(Number(options.minComments) || 5))));
 
   if (!cards.length) {
     return { out: { comments: [], changes: [] }, label: "isolated-player-post-comments-no-cast" };
@@ -65038,6 +65096,10 @@ function characterNicknameLines(w, c, en) {
   const out = [];
   if (lines.length) out.push((en ? "NICKNAMES YOU USE — use them naturally when you address these people, as your sheet says (even if they hate it): " : "BECENEVEK, AMIKET HASZNÁLSZ — szólítsd így őket természetesen, ahogy a lapod mondja (akkor is, ha utálják): ") + lines.slice(0, 6).join(" · "));
   if (own.length) out.push((en ? "WHAT OTHERS CALL YOU — when someone uses one of these, react exactly as written: " : "AHOGY TÉGED HÍVNAK — ha valaki így szólít, pontosan így reagálj: ") + own.slice(0, 5).join(" · "));
+  /* R77: a pet name on the sheet belongs to the one person it names */
+  out.push(en
+    ? "A name or pet name on your sheet belongs ONLY to the person it names there. Never call anyone else by it — not the player, not a crush, not anyone who reminds you of them."
+    : "A lapodon szereplő név vagy becenév CSAK ahhoz az egy emberhez tartozik, akit ott jelöl. Senki mást ne szólíts így — a játékost sem, a crushodat sem, senkit, aki rá emlékeztet.");
   return out.join("\n");
 }
 
