@@ -5673,8 +5673,9 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (source === "dm") {
     /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
     raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
-  } else if (source === "popup") {
-    /* Popups: free providers first; paid Venice only when the player is waiting on it (reroll / own answer). */
+  } else if (source === "popup" || source === "invite") {
+    /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
+       waiting on it (reroll / own answer). */
     raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"];
   } else if (source === "scene") {
     /* Scenes: Dolphin (OpenRouter key 1) -> Venice (OpenRouter key 2, paid) -> Mistral 1 -> Mistral 2. */
