@@ -30,9 +30,11 @@ test("Older Gemini models get the room but no Gemini 3 thinking setting", () => 
   assert.equal(cfg.maxOutputTokens, 900 + 2048);
 });
 
-test("Other requests are sent exactly as before", () => {
-  for (const src of ["feed-post", "dm", "scene", "sheet-summary", ""]) {
+test("R91: every ordinary request gets the same thinking room; long-budget ones are sent as before", () => {
+  for (const src of ["feed-post", "dm", "scene", ""]) {
     const cfg = context.build(body(src, "gemini-3.8-flash", 1500)).generationConfig;
-    assert.deepEqual(JSON.parse(JSON.stringify(cfg)), { maxOutputTokens: 1500 }, src || "(none)");
+    assert.deepEqual(JSON.parse(JSON.stringify(cfg)), { maxOutputTokens: 1500 + 2048, thinkingConfig: { thinkingLevel: "LOW" } }, src || "(none)");
   }
+  const long = context.build(body("sheet-summary", "gemini-3.8-flash", 9000)).generationConfig;
+  assert.deepEqual(JSON.parse(JSON.stringify(long)), { maxOutputTokens: 9000 });
 });
