@@ -5250,7 +5250,9 @@ async function callMessageProvider(provider, body) {
   /* OpenRouter roleplay chain: MODEL_3 first, then MODEL_2 on the second key, then MODEL_1. */
   if (provider === "openrouter3") {
     const model = providerModel("openrouter3", body);
-    let result = await proxyCompatibleMessage("openrouter3", process.env.OPENROUTER_API_KEY, model, "https://openrouter.ai/api/v1/chat/completions", body);
+    /* R78: Nemotron :free runs on the funded OpenRouter account (key 2: 1000 free requests a day instead of 50) */
+    const openRouter3Key = process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY;
+    let result = await proxyCompatibleMessage("openrouter3", openRouter3Key, model, "https://openrouter.ai/api/v1/chat/completions", body);
     if (!result?.ok && Number(result?.status) === 402) {
       const message = safeProviderMessage(result, "");
       const match = message.match(/can only afford\s+(\d+)/i);
@@ -5260,7 +5262,7 @@ async function callMessageProvider(provider, body) {
         const retryTokens = Math.max(80, Math.min(requested - 1, affordable - 16));
         if (retryTokens < requested) {
           console.warn("[ai-provider] openrouter3-token-downshift", "requested=" + requested, "retry=" + retryTokens, "affordable=" + affordable);
-          result = await proxyCompatibleMessage("openrouter3", process.env.OPENROUTER_API_KEY, model, "https://openrouter.ai/api/v1/chat/completions", { ...body, max_tokens: retryTokens });
+          result = await proxyCompatibleMessage("openrouter3", openRouter3Key, model, "https://openrouter.ai/api/v1/chat/completions", { ...body, max_tokens: retryTokens });
         }
       }
     }
@@ -5295,7 +5297,7 @@ function configuredAIProvider(provider) {
   if (provider === "openrouter-dm-dolphin") return Boolean(process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter-dm-venice") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
-  if (provider === "openrouter3") return Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL_3);
+  if (provider === "openrouter3") return Boolean((process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY) && process.env.OPENROUTER_MODEL_3);
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter2") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "openai") return Boolean(OPENAI_API_KEY);
@@ -5681,7 +5683,9 @@ function taskProviderOrder(requestedProvider, body) {
   if (source === "dm" && !playerWaiting) {
     /* R70: an unprompted DM nobody is waiting for uses free capacity only:
        Dolphin -> Nemotron -> free Gemini -> Groq 1 -> Groq 2 (when it fits). */
-    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"];
+    /* R78: when every free one is out (Gemma 429, Nemotron daily cap, Gemini overloaded) a triggered DM ("text me",
+       no follow-back, unfollow) still arrives through paid Venice — R71 already keeps these to a handful an hour. */
+    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"];
   } else if (source === "dm") {
     /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
     raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
@@ -5726,7 +5730,7 @@ function taskProviderOrder(requestedProvider, body) {
       providerAllowedForBody(provider, body)
     ),
     body,
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || (source === "dm" && playerWaiting) || source === "scene" || isComment }
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
   );
 }
 
@@ -5935,7 +5939,7 @@ async function executeAITask(task) {
     if (result?.ok) {
       markProviderSuccess(provider);
       /* Diagnostics: what a comment request actually got back (start of the answer only). */
-      if (/(?:^|[-_])comments?(?:[-_]|$)|player-post-comment|feed/.test(kindOfRequest)) {
+      if (/(?:^|[-_])comments?(?:[-_]|$)|player-post-comment|feed|^dm$/.test(kindOfRequest)) {
         const answered = String(answerText(result) || "");
         console.info("[ai-answer] " + kindOfRequest, `priority=${task.priority}`, `provider=${provider}/${model}`, `chars=${answered.length}`, JSON.stringify(answered.slice(0, 1200)));
       }

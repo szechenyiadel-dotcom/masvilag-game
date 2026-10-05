@@ -45,11 +45,14 @@ test("A psychopath / obsessed character gets a named FULL-strength order on thei
 
 test("Hungarian sheets and the character bible count too; ordinary people get nothing", () => {
   const directive = harness([], {}, { zoe: { core: "kedves lány", extremes: [{ trait: "megszállott", toward: "Brent", shows: "minden posztját figyeli" }] } });
-  assert.match(directive({ id: "r", name: "Rex", personality: "kegyetlen, szadista, veszélyes" }), /cruel:[\s\S]*dangerous:/);
+  assert.match(directive({ id: "r", name: "Rex", personality: "kegyetlen, szadista, erőszakos" }), /cruel:[\s\S]*dangerous:/);
   assert.match(directive({ id: "zoe", name: "Zoe", personality: "vidám" }), /obsessed: fixated/);
   assert.equal(directive({ id: "m", name: "Mia", personality: "kedves, kíváncsi, konfliktuskerülő", traits: "empátia magas" }), "");
   assert.equal(directive({ id: "ry", name: "Ryan", personality: "arrogáns, éles nyelvű", traits: "IQ magas, empátia alacsony" }), "", "low empathy alone is not a psychopath");
   assert.equal(directive({ id: "me", name: "Player", personality: "psychopath" }), "", "never for the player");
+  assert.equal(directive({ id: "b", name: "Brent", personality: "cocky, ruthless in the ring, dangerous fighter, volatile" }), "", "R78: ordinary tough words are not an extreme nature");
+  assert.equal(directive({ id: "n", name: "Nina", personality: "loyal friend, not possessive, never cruel" }), "", "R78: a negated trait does not count");
+  assert.match(directive({ id: "p", name: "Pia", personality: "possessive girlfriend" }), /aimed ONLY at the person their sheet names/, "R78: possessiveness only toward its target");
 });
 
 test("The order sits on every speaker card and in the global policy of every AI request", () => {
