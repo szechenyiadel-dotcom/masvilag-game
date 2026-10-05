@@ -811,13 +811,15 @@ test("A reply the player reads gets half again as much room under the paid ceili
 });
 
 
-test("Final OpenRouter routing uses key 1 for Dolphin and Nemotron, and key 2 for Venice", () => {
-  assert.match(source, /cognitivecomputations\/dolphin3\.0-mistral-24b:free/);
+test("Final OpenRouter routing: the first slot runs Gemma 4 31B (free) on the funded key 2, Nemotron on key 1, Venice on key 2", () => {
+  assert.match(source, /"google\/gemma-4-31b-it:free"/);
+  assert.doesNotMatch(source, /cognitivecomputations\/dolphin3\.0-mistral-24b:free/);
   assert.match(source, /cognitivecomputations\/dolphin-mistral-24b-venice-edition/);
-  assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY/);
+  assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
   assert.match(source, /proxyCompatibleMessage\("openrouter3", process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/);
+  assert.match(source, /provider === "openrouter-dm-dolphin"\n\s+\/\* R74[^\n]*\*\/\n\s+\? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ enabled: false, exclude: true \} \}/);
   assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openai"\]/);
   assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "openai", "openrouter-dm-venice"\]/);
   assert.match(source, /raw = \["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"\]/);
