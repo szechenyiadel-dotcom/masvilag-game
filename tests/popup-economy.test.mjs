@@ -54,17 +54,18 @@ test("A failed popup generation waits longer each time instead of retrying every
   assert.match(source, /if \(lastAttemptAt && now\(\) - lastAttemptAt < popupRetryWaitMs\(w\)\) return false;/);
 });
 
-test("Unprompted DMs: at most one every 4 minutes and 6 an hour; a 'text me' DM is never held back", () => {
-  const context = vm.createContext({ Math, Number, Array, now: () => 10 * 3600e3 });
-  vm.runInContext(pick(["RANDOM_DM_MIN_GAP_MS", "RANDOM_DM_HOURLY_MAX", "randomDmBudgetOpen"]), context);
+test("Unprompted DMs: 'text me', no follow-back and unfollow always come; any other reason at most one an hour", () => {
+  const context = vm.createContext({ Math, Number, Array, String, RegExp, now: () => 10 * 3600e3 });
+  vm.runInContext(pick(["DM_ALWAYS_ALLOWED_TRIGGER_RE", "OTHER_DM_HOURLY_MAX", "dmTriggerAlwaysAllowed", "otherDmBudgetOpen"]), context);
   const t = 10 * 3600e3;
-  assert.equal(context.randomDmBudgetOpen({}, t), true);
-  assert.equal(context.randomDmBudgetOpen({ lastAutonomousDmAt: t - 60e3 }, t), false, "one minute after the last");
-  assert.equal(context.randomDmBudgetOpen({ lastAutonomousDmAt: t - 5 * 60e3 }, t), true);
-  assert.equal(context.randomDmBudgetOpen({ lastAutonomousDmAt: t - 5 * 60e3, randomDmTimes: [1, 2, 3, 4, 5, 6].map((i) => t - i * 5 * 60e3) }, t), false, "six in the last hour");
+  for (const trigger of ["comment-dm-text-me", "follow-not-returned", "player-unfollowed", "popup-choice"]) assert.equal(context.dmTriggerAlwaysAllowed(trigger), true, trigger);
+  for (const trigger of ["gossip-story-reaction", "ignored-dm", "player-tagged", "romantic-jealousy", "relationship", "", undefined]) assert.equal(context.dmTriggerAlwaysAllowed(trigger), false, String(trigger));
+  assert.equal(context.otherDmBudgetOpen({}, t), true);
+  assert.equal(context.otherDmBudgetOpen({ otherDmTimes: [t - 20 * 60e3] }, t), false, "one other DM 20 minutes ago");
+  assert.equal(context.otherDmBudgetOpen({ otherDmTimes: [t - 61 * 60e3] }, t), true, "more than an hour ago");
   const planner = pick(["fullSpecNextAutonomousDmAction"]);
-  assert.equal((planner.match(/if\(!budgetOpen&&!\/\^comment-dm-\/\.test\(String\(row\.trigger\|\|""\)\)\)continue;/g) || []).length, 2);
-  assert.match(source, /sim\.randomDmTimes = \[\.\.\.\(Array\.isArray\(sim\.randomDmTimes\)/);
+  assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete sim\.deferredAutonomousDms\[row\.botId\];continue;\}/);
+  assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete state\.pendingDmTriggers\[row\.key\];continue;\}/);
+  assert.match(source, /if \(!dmTriggerAlwaysAllowed\(action\.payload && action\.payload\.trigger\)\) \{\n      sim\.otherDmTimes/);
   assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,220}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"\]/);
-  assert.match(proxy, /\(source === "dm" && playerWaiting\)/);
 });
