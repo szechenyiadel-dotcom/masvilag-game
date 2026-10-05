@@ -53,6 +53,9 @@ test("R89: comments / posts / DMs keep only the typed line, never roleplay narra
   assert.equal(s("Feng smirks."), "");
   assert.equal(s('She said "no" and I believed her.'), 'She said "no" and I believed her.', "a quote inside an ordinary sentence stays");
   assert.equal(s("Typical. Can't even handle one."), "Typical. Can't even handle one.");
+  assert.equal(s('"Maybe? Then you better start acting like one."'), "Maybe? Then you better start acting like one.", "R94: a wholly quoted DM loses its quotes");
+  assert.match(source, /never push to make it real/, "R94: the fake-dating lane forbids pushing to make it real");
+  assert.match(source, /casanova\|lothario/, "R94: broader player-type words");
   assert.match(source, /\/\\\*\[\^\*\]\+\\\*\/\.test\(String\(t \|\| ""\)\) \? requestedReplyRaw : stripSocialRoleplayNarration/);
 });
 
@@ -61,4 +64,16 @@ test("R90: 'text me' DMs are queued even though the saved world has no meId", ()
   assert.match(body, /const meId = \(w && w\.meId\) \|\| \(info && info\.playerId\) \|\| "";/);
   assert.match(source, /enqueueCommentAgreedDm\(n, botId, \{ kind: "request", playerId: freshActorId,/);
   assert.match(source, /STAY IN THIS LANE — /);
+});
+
+test("R95: fake dating stays secret in public comments and posts", () => {
+  const ctx = vm.createContext({ String, RegExp });
+  vm.runInContext(pick(["keepFakeDatingSecretInPublic"]), ctx);
+  const k = (t) => ctx.keepFakeDatingSecretInPublic(t);
+  assert.equal(k("Well, well, if it isn't the fake girlfriend. How's that going for you, Tandy?"), "Well, well, if it isn't the girlfriend. How's that going for you, Tandy?");
+  assert.equal(k("Still pretending to date him?"), "Still dating him?");
+  assert.equal(k("Hogy megy a kamu barátnősködés?"), "Hogy megy a barátnősködés?");
+  assert.equal(k("Nice shot, babe."), "Nice shot, babe.");
+  assert.match(source, /keepFakeDatingSecretInPublic\(args\[2\]\)/);
+  assert.match(source, /keepFakeDatingSecretInPublic\(stripSocialRoleplayNarration\(n, author, p\.text\)\)/);
 });
