@@ -77,3 +77,16 @@ test("R95: fake dating stays secret in public comments and posts", () => {
   assert.match(source, /keepFakeDatingSecretInPublic\(args\[2\]\)/);
   assert.match(source, /keepFakeDatingSecretInPublic\(stripSocialRoleplayNarration\(n, author, p\.text\)\)/);
 });
+
+test("R96: a scene answer with its lines under another key keeps them", () => {
+  const ctx = vm.createContext({ String, Array, Object });
+  vm.runInContext(pick(["normalizeSceneAnswerShape"]), ctx);
+  const n = (o) => JSON.parse(JSON.stringify(ctx.normalizeSceneAnswerShape(o)));
+  assert.deepEqual(n({ dialogue: [{ character: "Brent", line: "Took you long enough." }] }).turns.map((t) => [t.id, t.text]), [["Brent", "Took you long enough."]]);
+  assert.deepEqual(n({ scene: { turns: [{ id: "narrator", text: "Rain on the glass." }] } }).turns.map((t) => t.id), ["narrator"]);
+  assert.deepEqual(n([{ speaker: "Feng", content: "Sit." }]).turns.map((t) => t.text), ["Sit."]);
+  assert.deepEqual(n({ turns: [{ name: "Feng", message: "Sit." }] }).turns.map((t) => [t.id, t.text]), [["Feng", "Sit."]]);
+  const summary = { summary: "done", memories: [] };
+  assert.deepEqual(n(summary), summary, "a scene-closing summary is untouched");
+  assert.match(source, /reportClientDiag\("scene-stuck"/);
+});
