@@ -17,10 +17,11 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 
 console.info("[patch-status] canonical-source=phase2-direct; runtime-patches=none; patch-target-misses=none");
 import {
-  Home, Users, MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
-  X, Trash2, ChevronLeft, ChevronRight, Loader2, Heart, Lock, Zap, Pencil,
-  Image as ImageIcon, Upload, Film, Network, Copy, UserCircle, Check, Bell
+  MessageCircle, Globe2, Send, Sparkles, Plus, RefreshCcw,
+  X, Trash2, ChevronLeft, ChevronRight, Loader2, Lock, Zap, Pencil,
+  Image as ImageIcon, Upload, Copy, UserCircle, Check, Bell, Moon
 } from "lucide-react";
+import { createPortal } from "react-dom";
 
 /* ============================================================
    másvilág — AI social media szerepjáték
@@ -28,32 +29,43 @@ import {
    ============================================================ */
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap');
 
 .mv, .mv * { box-sizing: border-box; }
 .mv {
-  --ink:#0A0910; --surface:#141220; --raised:#1E1A2C; --line:#2C2740;
-  --oxblood:#8A1D3B; --gold:#C8A45C; --rose:#D9758F; --steel:#5B7A99;
-  --bone:#ECE4DA; --muted:#8C84A0;
+  /* hush — every colour of the app lives here */
+  --bg:#040906;
+  --bg-glow:radial-gradient(120% 40% at 50% -8%, rgba(18,128,76,.30), transparent 62%);
+  --card:#0B140F; --card-hi:#112018; --card-line:#1C2E23;
+  --card-grad:linear-gradient(180deg, #0E1A13, #09120D);
+  --text:#EEF6F0; --text-dim:#93AA9B;
+  --emerald:linear-gradient(180deg, #12804C, #0A5232); --emerald-a:#12804C; --emerald-b:#0A5232;
+  --poison:#2BE07A; --absinthe:#CDEB8B;
+  --gossip-bg:#0A2216; --gossip-line:#1F5A3A;
+  --neg:#9FB3C8;
+  --whisper:26px 26px 26px 6px;
+  --serif:'Instrument Serif', Georgia, 'Times New Roman', serif;
+  --sans:'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* the older names the components use, mapped onto the hush palette */
+  --ink:var(--bg); --surface:var(--card); --raised:var(--card-hi); --line:var(--card-line);
+  --oxblood:var(--emerald-a); --gold:var(--absinthe); --rose:var(--poison); --steel:var(--neg);
+  --bone:var(--text); --muted:var(--text-dim);
   position:fixed; inset:0; display:flex; flex-direction:column;
-  background:
-    radial-gradient(120% 60% at 50% -10%, rgba(138,29,59,.22), transparent 60%),
-    radial-gradient(90% 50% at 100% 100%, rgba(91,122,153,.12), transparent 70%),
-    var(--ink);
-  color:var(--bone); font-family:Inter, system-ui, sans-serif; font-size:15px; line-height:1.5;
+  background:var(--bg-glow), var(--bg);
+  color:var(--text); font-family:var(--sans); font-size:15px; line-height:1.5;
 }
 .mv-wrap { width:100%; max-width:560px; margin:0 auto; flex:1; display:flex; flex-direction:column; min-height:0; }
 .mv-main { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:0 14px 90px; }
 .mv-main::-webkit-scrollbar { width:6px; }
 .mv-main::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px; }
 
-.mv h1,.mv h2,.mv h3 { font-family:Fraunces, Georgia, serif; font-weight:700; margin:0; letter-spacing:-.01em; }
-.mono { font-family:'JetBrains Mono', ui-monospace, monospace; }
+.mv h1,.mv h2,.mv h3 { font-family:var(--serif); font-weight:700; margin:0; letter-spacing:-.01em; }
+.mono { font-family:var(--sans); font-variant-numeric:tabular-nums; }
 
 /* fejléc */
-.hdr { padding:14px 14px 8px; border-bottom:1px solid var(--line); background:rgba(10,9,16,.86); backdrop-filter:blur(8px); }
+.hdr { padding:14px 14px 8px; border-bottom:1px solid var(--line); background:rgba(4,9,6,.86); backdrop-filter:blur(8px); }
 .hdr-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.mark { font-family:Fraunces, Georgia, serif; font-size:24px; font-weight:700; letter-spacing:-.02em; }
+.mark { font-family:var(--serif); font-size:24px; font-weight:700; letter-spacing:-.02em; }
 .mark i { font-style:normal; color:var(--rose); }
 .hdr-meta { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.14em; }
 
@@ -74,7 +86,7 @@ const CSS = `
 .row { display:flex; gap:10px; }
 .between { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .av { width:38px; height:38px; border-radius:12px; flex:none; display:grid; place-items:center;
-  font-family:Fraunces,serif; font-size:16px; color:#0A0910; overflow:hidden; }
+  font-family:var(--serif); font-size:16px; color:#040906; overflow:hidden; }
 .av img { width:100%; height:100%; object-fit:cover; }
 .av.sm { width:28px; height:28px; border-radius:9px; font-size:12px; }
 .name { font-weight:600; font-size:14.5px; }
@@ -84,7 +96,7 @@ const CSS = `
 /* kommentek */
 .cmts { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; display:flex; flex-direction:column; gap:10px; }
 .cmt { display:flex; gap:8px; }
-.cmt-body { font-size:13.5px; color:#DCD5CB; }
+.cmt-body { font-size:13.5px; color:#D6E4DA; }
 .cmt-name { font-size:12px; font-weight:600; }
 
 /* gombok */
@@ -93,7 +105,7 @@ const CSS = `
 .btn:hover:not(:disabled) { border-color:var(--rose); }
 .btn:disabled { opacity:.45; cursor:not-allowed; }
 .btn.primary { background:var(--oxblood); border-color:var(--oxblood); font-weight:600; }
-.btn.primary:hover:not(:disabled) { background:#A02347; }
+.btn.primary:hover:not(:disabled) { background:#169158; }
 .btn.ghost { background:transparent; }
 .btn.tiny { padding:5px 10px; font-size:11.5px; border-radius:8px; }
 .btn.full { width:100%; justify-content:center; }
@@ -104,7 +116,7 @@ label.f { display:block; font-size:10.5px; letter-spacing:.13em; text-transform:
 input.i, textarea.i, select.i { width:100%; background:var(--ink); border:1px solid var(--line); color:var(--bone);
   border-radius:10px; padding:10px 12px; font-family:inherit; font-size:14px; }
 textarea.i { resize:vertical; min-height:70px; line-height:1.45; }
-input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
+input.i::placeholder, textarea.i::placeholder { color:#56705F; }
 
 /* kapcsolat-sáv */
 .bar { position:relative; height:5px; border-radius:99px; background:var(--raised); overflow:hidden; }
@@ -114,7 +126,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
 /* alsó menü */
 .nav { position:absolute; left:0; right:0; bottom:0; border-top:1px solid var(--line);
-  background:rgba(10,9,16,.94); backdrop-filter:blur(10px); display:flex; }
+  background:rgba(4,9,6,.94); backdrop-filter:blur(10px); display:flex; }
 .nav-in { width:100%; max-width:560px; margin:0 auto; display:flex; }
 .nav button { flex:1; background:none; border:none; color:var(--muted); padding:10px 0 14px; cursor:pointer;
   display:flex; flex-direction:column; align-items:center; gap:4px; font-family:inherit; font-size:10px; letter-spacing:.06em; }
@@ -178,11 +190,11 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 /* jelenet */
 .scene-hd { position:sticky; top:0; z-index:5; background:var(--ink); padding:10px 0; }
-.narr { font-family:Fraunces, Georgia, serif; font-style:italic; color:var(--muted); text-align:center;
+.narr { font-family:var(--serif); font-style:italic; color:var(--muted); text-align:center;
   font-size:13.5px; margin:16px 10px; line-height:1.6; }
 .turn { display:flex; gap:9px; margin-top:14px; }
 .turn-name { font-size:11.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--gold); margin-bottom:2px; }
-.turn-act { font-style:italic; color:#C4BCD2; }
+.turn-act { font-style:italic; color:#B9CCBF; }
 
 /* ---------- ROLEPLAY CAST PRESENCE + FAIR PARTICIPATION — v81 ---------- */
 .scene-header-cast {
@@ -220,7 +232,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 .scene-attendee-chip.player {
   border-color:var(--oxblood);
-  background:rgba(138,29,59,.12);
+  background:rgba(18,128,76,.12);
 }
 .scene-attendee-name {
   max-width:150px;
@@ -237,7 +249,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   border-radius:999px;
   background:var(--ink);
   color:var(--muted);
-  font-family:'JetBrains Mono',ui-monospace,monospace;
+  font-family:var(--sans); font-variant-numeric:tabular-nums;
   font-size:9px;
   text-align:center;
 }
@@ -253,7 +265,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 
 /* modal */
-.scrim { position:absolute; inset:0; background:rgba(5,4,9,.72); backdrop-filter:blur(3px); z-index:40; display:flex; align-items:flex-end; }
+.scrim { position:absolute; inset:0; background:rgba(2,5,3,.72); backdrop-filter:blur(3px); z-index:40; display:flex; align-items:flex-end; }
 .sheet { width:100%; max-width:560px; margin:0 auto; max-height:92%; overflow-y:auto; background:var(--surface);
   border:1px solid var(--line); border-bottom:none; border-radius:18px 18px 0 0; padding:16px 16px 28px; }
 .sheet::-webkit-scrollbar { width:6px } .sheet::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px }
@@ -284,7 +296,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   width: min(100%, 420px);
   margin: 0 auto;
   overflow: hidden;
-  background: #08070c;
+  background: #030604;
   border: 1px solid var(--line);
   border-radius: 16px;
   cursor: grab;
@@ -306,15 +318,15 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   position: absolute;
   inset: 0;
   pointer-events: none;
-  box-shadow: inset 0 0 0 9999px rgba(5,4,9,.22);
+  box-shadow: inset 0 0 0 9999px rgba(2,5,3,.22);
 }
 .image-crop-grid {
   position: absolute;
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, transparent 33.2%, rgba(236,228,218,.22) 33.3%, rgba(236,228,218,.22) 33.5%, transparent 33.6%, transparent 66.5%, rgba(236,228,218,.22) 66.6%, rgba(236,228,218,.22) 66.8%, transparent 66.9%),
-    linear-gradient(0deg, transparent 33.2%, rgba(236,228,218,.22) 33.3%, rgba(236,228,218,.22) 33.5%, transparent 33.6%, transparent 66.5%, rgba(236,228,218,.22) 66.6%, rgba(236,228,218,.22) 66.8%, transparent 66.9%);
+    linear-gradient(90deg, transparent 33.2%, rgba(238,246,240,.22) 33.3%, rgba(238,246,240,.22) 33.5%, transparent 33.6%, transparent 66.5%, rgba(238,246,240,.22) 66.6%, rgba(238,246,240,.22) 66.8%, transparent 66.9%),
+    linear-gradient(0deg, transparent 33.2%, rgba(238,246,240,.22) 33.3%, rgba(238,246,240,.22) 33.5%, transparent 33.6%, transparent 66.5%, rgba(238,246,240,.22) 66.6%, rgba(238,246,240,.22) 66.8%, transparent 66.9%);
 }
 .image-crop-controls {
   margin-top: 16px;
@@ -356,7 +368,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 }
 
 .toast { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:60; width:calc(100% - 28px); max-width:520px;
-  border:1px solid var(--oxblood); background:#2B1020; border-radius:12px; padding:11px 14px; font-size:13.5px;
+  border:1px solid var(--oxblood); background:#0A2216; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:flex-start; }
 .toast button { background:none; border:none; color:var(--muted); cursor:pointer; padding:0; margin-left:auto; }
 /* jegyzetek */
@@ -370,8 +382,8 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   border:1px solid var(--line); }
 .bubble:after { bottom:-7px; width:7px; height:7px; }
 .bubble:before { bottom:-13px; width:4px; height:4px; }
-.bubble.mine { background:#2A1420; border-color:var(--oxblood); }
-.bubble.mine:after, .bubble.mine:before { background:#2A1420; border-color:var(--oxblood); }
+.bubble.mine { background:#0A2216; border-color:var(--oxblood); }
+.bubble.mine:after, .bubble.mine:before { background:#0A2216; border-color:var(--oxblood); }
 .bubble.empty { color:var(--muted); font-style:italic; border-style:dashed; }
 .note-who { font-size:10px; color:var(--muted); margin-top:5px; max-width:78px; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; text-align:center; }
@@ -394,34 +406,34 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .note-nm { font-size:10px; color:var(--muted); max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 .flash { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:60; width:calc(100% - 28px); max-width:520px;
-  border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
+  border:1px solid var(--gold); background:#0A2216; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
 .badge { position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 4px; border-radius:99px;
-  background:var(--rose); color:#0A0910; font-size:9.5px; font-weight:700; display:grid; place-items:center; }
+  background:var(--rose); color:#040906; font-size:9.5px; font-weight:700; display:grid; place-items:center; }
 .note-row { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-bottom:1px solid var(--line); cursor:pointer; }
 .note-row:last-child { border-bottom:none; }
 .note-ico { font-size:16px; line-height:1.2; }
 .note-new { color:var(--rose); }
 
 .flash { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:60; width:calc(100% - 28px); max-width:520px;
-  border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
+  border:1px solid var(--gold); background:#0A2216; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
 .badge { position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 4px; border-radius:99px;
-  background:var(--rose); color:#0A0910; font-size:9.5px; font-weight:700; display:grid; place-items:center; }
+  background:var(--rose); color:#040906; font-size:9.5px; font-weight:700; display:grid; place-items:center; }
 .note-row { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-bottom:1px solid var(--line); cursor:pointer; }
 .note-row:last-child { border-bottom:none; }
 .note-ico { font-size:16px; line-height:1.2; }
 .note-new { color:var(--rose); }
 
 .rest { position:fixed; left:50%; transform:translateX(-50%); top:14px; z-index:61; width:calc(100% - 28px); max-width:520px;
-  border:1px solid var(--gold); background:#22190E; border-radius:12px; padding:11px 14px; font-size:13.5px;
+  border:1px solid var(--gold); background:#0A2216; border-radius:12px; padding:11px 14px; font-size:13.5px;
   box-shadow:0 12px 34px rgba(0,0,0,.55); display:flex; gap:10px; align-items:center; }
 
 .thinking { display:flex; align-items:center; justify-content:center; gap:8px; color:var(--muted); font-size:12.5px;
-  font-family:Fraunces, Georgia, serif; font-style:italic; margin:16px 0; }
+  font-family:var(--serif); font-style:italic; margin:16px 0; }
 
 .chip { font-size:10.5px; padding:3px 8px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
-.err { border:1px solid var(--oxblood); background:rgba(138,29,59,.15); border-radius:10px; padding:9px 12px; font-size:13px; margin-top:12px; }
+.err { border:1px solid var(--oxblood); background:rgba(18,128,76,.15); border-radius:10px; padding:9px 12px; font-size:13px; margin-top:12px; }
 .hint { font-size:12px; color:var(--muted); }
 .sep { height:1px; background:var(--line); margin:16px 0; }
 .spin { animation:spin 1s linear infinite }
@@ -466,7 +478,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   background: linear-gradient(
     to bottom,
     transparent 58%,
-    rgba(10, 9, 16, .18)
+    rgba(4, 9, 6, .18)
   );
 }
 
@@ -666,7 +678,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   z-index: 8;
   margin: 0 -14px;
   padding: 0 14px;
-  background: rgba(10,9,16,.94);
+  background: rgba(4,9,6,.94);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
@@ -741,7 +753,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   background:transparent;
 }
 .social-post.highlight {
-  background:rgba(217,117,143,.06);
+  background:rgba(43,224,122,.06);
   box-shadow:inset 3px 0 0 var(--rose);
 }
 .social-post-head {
@@ -799,7 +811,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   padding:8px 0;
 }
 .social-comment + .social-comment {
-  border-top:1px solid rgba(44,39,64,.55);
+  border-top:1px solid rgba(28,46,35,.55);
 }
 .social-comment-action {
   border:0;
@@ -972,13 +984,13 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   letter-spacing:.06em;
   text-transform:uppercase;
   color:var(--gold);
-  background:rgba(200,164,92,.08);
+  background:rgba(205,235,139,.08);
 }
 
 .social-viral-badge.breakout {
   color:var(--rose);
   border-color:var(--oxblood);
-  background:rgba(138,29,59,.15);
+  background:rgba(18,128,76,.15);
 }
 
 .social-sentiment-strip {
@@ -1014,7 +1026,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   padding:10px 14px;
   border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);
-  background:rgba(30,26,44,.52);
+  background:rgba(17,32,24,.52);
 }
 
 .social-media-account-main {
@@ -1091,7 +1103,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
 .gossip-post-headline {
   margin:8px 0 0 48px;
-  font-family:Fraunces, Georgia, serif;
+  font-family:var(--serif);
   font-size:19px;
   font-weight:700;
   line-height:1.22;
@@ -1116,7 +1128,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   padding:9px 14px;
   border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);
-  background:rgba(20,18,32,.7);
+  background:rgba(11,20,15,.7);
 }
 .social-trends-head { display:flex; align-items:center; gap:6px; margin-bottom:7px; color:var(--muted); font-size:9.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
 .social-trend-list { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
@@ -1127,8 +1139,8 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 .popup-event-scrim { z-index:90; }
 .popup-event-sheet { max-width:500px; max-height:min(86vh,760px); overflow-y:auto; }
 .popup-event-kicker { display:flex; align-items:center; gap:6px; color:var(--rose); font-size:9.5px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; }
-.popup-event-title { margin-top:7px; font-family:Fraunces,Georgia,serif; font-size:24px; line-height:1.15; }
-.popup-event-body { margin-top:9px; color:#DCD5CB; white-space:pre-wrap; }
+.popup-event-title { margin-top:7px; font-family:var(--serif); font-size:24px; line-height:1.15; }
+.popup-event-body { margin-top:9px; color:#D6E4DA; white-space:pre-wrap; }
 .popup-choice-list { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
 .popup-choice { width:100%; text-align:left; justify-content:flex-start; padding:11px 12px; }
 .popup-choice-copy { min-width:0; }
@@ -1242,7 +1254,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
 .scene-cast-chip.selected {
   border-color:var(--rose);
-  background:rgba(190,54,107,.16);
+  background:rgba(43,224,122,.16);
 }
 
 .scene-cast-check {
@@ -1315,7 +1327,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   padding:10px 18px 14px;
   padding-bottom:max(14px,env(safe-area-inset-bottom));
   border-top:1px solid var(--line);
-  background:rgba(10,9,16,.98);
+  background:rgba(4,9,6,.98);
   backdrop-filter:blur(14px);
   -webkit-backdrop-filter:blur(14px);
 }
@@ -1348,7 +1360,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     padding: 10px 12px;
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
 
-    background: rgba(10, 9, 16, 0.96);
+    background: rgba(4, 9, 6, 0.96);
 
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
@@ -1427,7 +1439,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     margin: 0 -14px 12px !important;
     padding: calc(10px + env(safe-area-inset-top)) 14px 10px !important;
 
-    background: rgba(10, 9, 16, .985);
+    background: rgba(4, 9, 6, .985);
     border-bottom: 1px solid var(--line);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
@@ -1516,7 +1528,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
 
   .character-list-card:active {
     transform: scale(.995);
-    border-color: rgba(178, 51, 86, .72);
+    border-color: rgba(18, 128, 76, .72);
   }
 
   .character-list-card > .row {
@@ -1594,7 +1606,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     margin: 0 -14px 12px !important;
     padding: calc(10px + env(safe-area-inset-top)) 14px 10px !important;
 
-    background: rgba(10, 9, 16, .985);
+    background: rgba(4, 9, 6, .985);
     border-bottom: 1px solid var(--line);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
@@ -1689,7 +1701,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     position:relative;
     z-index:8;
     padding:calc(10px + env(safe-area-inset-top)) 14px 10px !important;
-    background:rgba(10,9,16,.99) !important;
+    background:rgba(4,9,6,.99) !important;
   }
 
   .scene-create-header h2 {
@@ -1779,7 +1791,7 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
     z-index:12 !important;
     padding:9px 14px !important;
     padding-bottom:calc(9px + env(safe-area-inset-bottom)) !important;
-    background:rgba(10,9,16,.995) !important;
+    background:rgba(4,9,6,.995) !important;
     border-top:1px solid var(--line) !important;
     box-shadow:0 -10px 24px rgba(0,0,0,.28);
   }
@@ -1792,6 +1804,273 @@ input.i::placeholder, textarea.i::placeholder { color:#5D5772; }
   }
 
 }
+
+/* =====================================================================
+   hush — premium skin (appearance only; every class below already exists
+   or is a new layout wrapper). Later rules win, so this layer is last.
+   ===================================================================== */
+.mv { -webkit-font-smoothing:antialiased; }
+.mv h1, .mv h2, .mv h3 { font-family:var(--serif); font-weight:400; letter-spacing:-.005em; }
+.mv h2 { font-size:28px; line-height:1.08; }
+.mv h3 { font-size:21px; line-height:1.15; }
+.mono { font-family:var(--sans); font-variant-numeric:tabular-nums; letter-spacing:0; }
+.hint { color:var(--text-dim); }
+
+/* logo */
+.mark.hush-mark { font-family:var(--serif); font-style:italic; font-weight:400; font-size:34px; letter-spacing:-.01em;
+  line-height:1; color:var(--text); display:inline-flex; align-items:baseline; }
+.hush-dot { color:var(--poison); font-style:normal; margin-left:1px;
+  text-shadow:0 0 8px rgba(43,224,122,.75), 0 0 18px rgba(43,224,122,.35); }
+
+/* the whisper shape: three round corners, the bottom-left one sharp */
+.card, .btn, input.i, textarea.i, select.i, .social-post, .sheet, .toast, .flash, .social-composer,
+.popup-choice, .hush-pill, .social-profile, .scene-attendance-card, .hush-whisper {
+  border-radius:var(--whisper) !important;
+}
+
+/* cards */
+.card {
+  background:var(--card-grad); border:1px solid var(--card-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045), 0 12px 30px rgba(0,0,0,.32);
+  padding:16px 16px;
+}
+.card.flat { background:transparent; box-shadow:none; }
+
+/* buttons — every touch target at least 44px */
+.btn { min-height:44px; padding:10px 18px; background:var(--card-hi); border:1px solid var(--card-line); color:var(--text);
+  font-family:var(--sans); font-weight:600; font-size:13.5px; letter-spacing:.01em; justify-content:center; }
+.btn:hover:not(:disabled) { border-color:rgba(43,224,122,.55); }
+.btn.tiny { min-height:44px; min-width:44px; padding:8px 14px; font-size:12.5px; }
+.btn.ghost { background:transparent; }
+.btn.primary { background:var(--emerald); border:1px solid rgba(43,224,122,.28); color:#fff;
+  box-shadow:0 10px 28px rgba(43,224,122,.22), inset 0 1px 0 rgba(255,255,255,.14); }
+.btn.primary:hover:not(:disabled) { background:linear-gradient(180deg, #169158, #0B5E39); border-color:rgba(43,224,122,.5); }
+.btn:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:2px solid var(--poison); outline-offset:2px; }
+.btn.tiny.primary { box-shadow:0 6px 18px rgba(43,224,122,.18), inset 0 1px 0 rgba(255,255,255,.14); }
+
+/* inputs */
+input.i, textarea.i, select.i { background:#07100B; border:1px solid var(--card-line); color:var(--text);
+  padding:12px 14px; font-family:var(--sans); font-size:15px; min-height:44px; }
+input.i::placeholder, textarea.i::placeholder { color:#5E7767; }
+label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; letter-spacing:.14em; }
+
+/* chips / badges */
+.chip { border-color:var(--card-line); color:var(--text-dim); background:rgba(17,32,24,.6); }
+.badge { background:var(--poison) !important; color:#03140A !important; font-weight:700; }
+.dot { background:var(--poison); box-shadow:0 0 8px rgba(43,224,122,.6); }
+
+/* avatars: rounded squares, italic serif initial on sage / green */
+.av { font-family:var(--serif); font-style:italic; font-weight:400; color:#06110B; border:1px solid rgba(238,246,240,.06); }
+
+/* relationship bar: right = poison green (positive), left = blue-grey (negative) */
+.bar { height:6px; background:#0D1912; border:1px solid var(--card-line); }
+.bar-mid { background:rgba(238,246,240,.28); width:1px; }
+
+/* header */
+.hdr { background:rgba(4,9,6,.78); border-bottom:1px solid var(--card-line); padding:12px 16px 10px; }
+.hdr-row { gap:8px; }
+.hdr-meta { font-size:10.5px; color:var(--text-dim); letter-spacing:.12em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hush-clock { display:inline-flex; align-items:center; gap:7px; min-height:34px; padding:6px 12px; border-radius:99px;
+  border:1px solid var(--card-line); background:rgba(11,20,15,.8); color:var(--text); font-size:12.5px; font-weight:600;
+  white-space:nowrap; box-shadow:inset 0 1px 0 rgba(255,255,255,.04); }
+.hush-clock svg { color:var(--absinthe); }
+.hush-hdr-actions { display:flex; align-items:center; gap:6px; flex:none; }
+.ticker { border-color:var(--card-line); background:rgba(11,20,15,.8); }
+.ticker-tag { color:var(--poison); }
+
+/* ---------- shell: mobile first ---------- */
+.hush-shell { flex:1; min-height:0; display:flex; justify-content:center; width:100%; }
+.mv-wrap { max-width:640px; }
+.mv-main { padding:0 16px 120px; }
+.hush-side, .hush-rail { display:none; }
+.nav { display:none !important; }
+
+/* mobile: floating capsule tab bar + separate whisper-shaped "+" */
+.hush-tabbar { position:absolute; left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom)); z-index:30;
+  display:flex; align-items:center; gap:10px; pointer-events:none; }
+.hush-tabs { pointer-events:auto; flex:1; display:flex; gap:4px; padding:5px; border-radius:99px;
+  background:rgba(9,18,13,.92); border:1px solid var(--card-line); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  box-shadow:0 14px 34px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05); }
+.hush-tabs button { flex:1; min-height:44px; border:0; border-radius:99px; background:transparent; color:var(--text-dim);
+  font-family:var(--sans); font-weight:600; font-size:13px; cursor:pointer; position:relative; }
+.hush-tabs button.on { background:var(--emerald); color:#fff; box-shadow:0 6px 18px rgba(43,224,122,.22); }
+.hush-plus { pointer-events:auto; flex:none; width:58px; height:58px; border-radius:var(--whisper); border:1px solid rgba(43,224,122,.3);
+  background:var(--emerald); color:#fff; display:grid; place-items:center; cursor:pointer;
+  box-shadow:0 10px 28px rgba(43,224,122,.28), inset 0 1px 0 rgba(255,255,255,.16); }
+.hush-count { position:absolute; top:4px; right:10px; min-width:17px; height:17px; padding:0 5px; border-radius:99px;
+  background:var(--poison); color:#03140A; font-size:10px; font-weight:700; display:grid; place-items:center; line-height:1; }
+.hush-icon-btn { position:relative; }
+
+/* ---------- 760px and up: left menu ---------- */
+@media (min-width:760px) {
+  .hush-tabbar { display:none; }
+  .mv-main { padding-bottom:48px; }
+  .hush-side { display:flex; flex-direction:column; gap:6px; width:248px; flex:none; padding:26px 18px 22px;
+    border-right:1px solid var(--card-line); overflow-y:auto; }
+  .hush-side .hush-mark { font-size:44px; margin:0 0 12px 6px; }
+  .hush-side .hush-clock { align-self:flex-start; margin:0 0 18px 4px; }
+  .hush-side-item { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:48px; padding:6px 14px;
+    border:0; border-radius:var(--whisper); background:transparent; color:var(--text-dim); cursor:pointer; text-align:left;
+    font-family:var(--serif); font-size:25px; line-height:1.1; }
+  .hush-side-item:hover { color:var(--text); background:rgba(17,32,24,.6); }
+  .hush-side-item.on { color:var(--text); background:linear-gradient(90deg, rgba(18,128,76,.30), rgba(18,128,76,.05)); font-style:italic; }
+  .hush-side-item.on::before { content:""; width:6px; height:6px; border-radius:99px; background:var(--poison);
+    box-shadow:0 0 10px rgba(43,224,122,.8); margin-right:-2px; order:2; }
+  .hush-side-item.sub { font-family:var(--sans); font-size:13.5px; font-weight:600; min-height:44px; }
+  .hush-side-sep { height:1px; background:var(--card-line); margin:12px 6px; }
+  .hush-side .hush-whisper-btn { margin-top:16px; min-height:54px; font-size:14.5px; white-space:nowrap; padding:10px 14px; }
+  .hush-side .hush-count { position:static; }
+  .hdr .hush-mark, .hdr .hush-clock { display:none; }
+}
+
+/* ---------- 1100px and up: right rail ---------- */
+@media (min-width:1100px) {
+  .hush-rail { display:flex; flex-direction:column; gap:14px; width:310px; flex:none; padding:22px 18px; overflow-y:auto;
+    border-left:1px solid var(--card-line); }
+  .hush-rail h4 { margin:0 0 8px; font-family:var(--serif); font-weight:400; font-size:22px; }
+  /* the scene sheet lives in the rail here */
+  .mv-main .scene-attendance-card { display:none; }
+  .hush-top-row { display:flex; gap:12px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--card-line); cursor:pointer; }
+  .hush-top-row:first-of-type { border-top:0; }
+  .hush-top-num { font-family:var(--serif); font-style:italic; font-size:38px; line-height:.9; color:var(--poison); min-width:26px; }
+  .hush-top-title { font-family:var(--serif); font-size:17px; line-height:1.2; }
+}
+
+/* ---------- feed ---------- */
+.social-feed-head { margin:0 -16px; padding:6px 16px 0; background:rgba(4,9,6,.88); border-bottom:1px solid var(--card-line); }
+.social-feed-title { min-height:0; padding-top:6px; }
+.social-feed-tabs { gap:18px; padding:4px 2px 10px; }
+.social-feed-tab { padding:6px 0; min-height:44px; font-family:var(--serif); font-style:italic; font-size:30px; line-height:1;
+  color:rgba(147,170,155,.6); }
+.social-feed-tab.on { color:var(--text); font-weight:400; text-shadow:0 0 22px rgba(43,224,122,.25); }
+.social-feed-tab.on:after { left:0; right:auto; width:22px; bottom:2px; height:3px; background:var(--poison); box-shadow:0 0 10px rgba(43,224,122,.7); }
+
+.social-post { margin:14px 0 0; padding:16px; background:var(--card-grad); border:1px solid var(--card-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045), 0 12px 30px rgba(0,0,0,.32); }
+.social-post.highlight { background:linear-gradient(180deg, #0F2117, #0A160F); box-shadow:inset 0 0 0 1px rgba(43,224,122,.35), 0 12px 30px rgba(0,0,0,.32); }
+.social-post-meta { flex:1; gap:6px; }
+.social-post-meta .name { font-family:var(--serif); font-weight:400; font-size:20px; line-height:1.1; color:var(--text); }
+.social-post-time { margin-left:auto; color:var(--absinthe); font-size:12px; font-weight:600; white-space:nowrap; }
+.social-dot-sep { display:none; }
+.social-post-body { font-size:15px; color:#E3EEE6; }
+.social-post-media { border-radius:20px 20px 20px 6px; border-color:var(--card-line); }
+.social-actions { margin:12px 0 0 48px; gap:8px; flex-wrap:wrap; }
+.social-action { min-height:40px; min-width:44px; padding:8px 14px; border-radius:99px; border:1px solid var(--card-line);
+  background:rgba(17,32,24,.55); color:var(--text); font-family:var(--sans); font-weight:600; font-size:12.5px; }
+.social-action .hush-n { color:var(--text-dim); font-weight:500; margin-left:2px; }
+.social-action:hover { background:var(--card-hi); border-color:rgba(43,224,122,.4); color:var(--text); }
+.social-action.liked { background:rgba(18,128,76,.28); border-color:rgba(43,224,122,.5); color:var(--poison); }
+.social-action.reposted { background:rgba(18,128,76,.18); border-color:rgba(43,224,122,.35); color:var(--absinthe); }
+.social-action.social-reach { border:0; background:transparent; color:var(--text-dim); font-weight:500; }
+.social-comments { margin-left:48px; }
+.cmt-name { font-family:var(--serif); font-size:16px; font-weight:400; }
+.cmt-body { color:#D6E4DA; }
+.social-comment-box input.i { border-radius:var(--whisper) !important; min-height:44px; }
+.social-repost-note { color:var(--absinthe); }
+.social-trend { border-radius:var(--whisper) !important; }
+
+/* gossip post inside a card */
+.gossip-post-headline { font-family:var(--serif); font-size:26px; line-height:1.08; font-weight:400; }
+.gossip-post-kicker .confirmed { color:var(--poison); }
+.gossip-post-kicker .rumor { color:var(--absinthe); }
+
+/* ---------- whisper composer ("Suttogj valamit") ---------- */
+.hush-compose-scrim { position:absolute; inset:0; z-index:70; background:rgba(2,5,3,.82); backdrop-filter:blur(6px);
+  display:flex; align-items:flex-end; justify-content:center; }
+.hush-compose { width:100%; max-width:640px; max-height:100%; overflow-y:auto; padding:22px 18px calc(22px + env(safe-area-inset-bottom));
+  background:var(--bg-glow), #050C08; border:1px solid var(--card-line); border-bottom:0; border-radius:30px 30px 0 0; }
+.hush-compose-title { font-family:var(--serif); font-style:italic; font-size:40px; line-height:1; color:var(--poison);
+  text-shadow:0 0 24px rgba(43,224,122,.25); margin:2px 0 14px; }
+.hush-compose .social-composer { margin:0; padding:0; background:transparent; border:0; }
+.hush-compose .social-composer textarea.i { font-family:var(--serif); font-size:26px; line-height:1.25; min-height:180px; color:var(--text); }
+.hush-compose .social-composer-actions { margin-left:0; border-top:1px solid var(--card-line); padding-top:14px; }
+.hush-compose .social-composer-actions .btn.primary { min-height:52px; padding:12px 26px; font-size:15px; }
+.hush-compose .social-media-panel { margin-left:0; }
+@media (min-width:760px) {
+  .hush-compose-scrim { align-items:center; }
+  .hush-compose { border-radius:var(--whisper); border-bottom:1px solid var(--card-line); max-height:88vh; }
+}
+
+/* ---------- whisper wall (gossip) ---------- */
+.hush-wall-title { font-family:var(--serif); font-size:64px; line-height:.92; letter-spacing:-.02em; margin:22px 0 4px; }
+.hush-wall-title em { color:var(--poison); }
+.hush-filters { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 4px; }
+.hush-pill { min-height:44px; padding:8px 16px; border:1px solid var(--card-line); background:rgba(11,20,15,.8); color:var(--text-dim);
+  font-family:var(--sans); font-weight:600; font-size:13px; cursor:pointer; }
+.hush-pill.on { background:var(--emerald); border-color:rgba(43,224,122,.4); color:#fff; box-shadow:0 8px 22px rgba(43,224,122,.2); }
+.hush-wall-head ~ div .social-post { background:var(--gossip-bg); border-color:var(--gossip-line); }
+.hush-mobile-only { }
+@media (min-width:760px) { .hush-mobile-only { display:none !important; } }
+.hush-wall-lead-wrap .social-post { background:radial-gradient(120% 90% at 0% 0%, rgba(18,128,76,.45), transparent 60%), #08281A;
+  border-color:#2A7A51; box-shadow:0 16px 40px rgba(0,0,0,.45), 0 0 0 1px rgba(43,224,122,.18) inset; }
+.hush-wall-lead-wrap .gossip-post-headline { font-size:34px; }
+
+/* ---------- scene as a screenplay ---------- */
+.narr { font-family:var(--serif); font-style:italic; color:#C9D8CE; font-size:19px; line-height:1.45; text-align:center;
+  max-width:520px; margin:22px auto 0; }
+.hush-divider { display:flex; align-items:center; gap:10px; margin:16px auto 4px; max-width:260px; color:var(--gossip-line); }
+.hush-divider::before, .hush-divider::after { content:""; flex:1; height:1px; background:var(--card-line); }
+.hush-divider span { width:7px; height:7px; transform:rotate(45deg); border:1px solid #2A7A51; background:#0A2216; }
+.turn { display:block; margin-top:18px; }
+.turn > .av { display:none; }
+.turn-name { font-family:var(--serif); font-style:italic; font-size:21px; font-weight:400; text-transform:none; letter-spacing:0;
+  color:var(--absinthe); margin-bottom:3px; }
+.turn.hush-me .turn-name { color:var(--poison); }
+.turn-act, .hush-act { display:block; font-style:italic; color:#A8BDAF; font-size:14.5px; }
+.hush-say { display:block; font-size:16px; color:var(--text); line-height:1.5; }
+.scene-hd { background:rgba(4,9,6,.92); backdrop-filter:blur(10px); }
+.hush-scene-input { display:flex; align-items:flex-end; gap:10px; }
+.hush-scene-input textarea.i { flex:1; min-height:52px; }
+.hush-send { flex:none; width:52px; height:52px; min-height:52px; padding:0 !important; border-radius:99px !important; }
+
+/* ---------- DMs ("Whispers") ---------- */
+.hush-dm-row .name, .hush-dm-name { font-family:var(--serif); font-size:20px; font-weight:400; }
+.hush-dm-row.fresh { background:linear-gradient(180deg, #0F2318, #0A160F); border-color:rgba(43,224,122,.45) !important; }
+.hush-dm-count { min-width:22px; height:22px; padding:0 7px; border-radius:99px; background:var(--emerald); color:#fff; font-size:11px;
+  font-weight:700; display:inline-grid; place-items:center; box-shadow:0 4px 14px rgba(43,224,122,.3); }
+.bub { border-radius:20px 20px 20px 6px; }
+.bub.me { background:var(--emerald); border-radius:20px 20px 6px 20px; color:#fff; }
+.bub.them { background:var(--card-hi); border-color:var(--card-line); }
+
+/* ---------- "Me" ---------- */
+.hush-me-name { font-family:var(--serif); font-size:56px; line-height:.95; margin:22px 0 2px; letter-spacing:-.02em; }
+.hush-me-handle { color:var(--text-dim); font-size:13px; font-weight:600; }
+.hush-meter-label { display:flex; justify-content:space-between; gap:8px; font-size:12px; font-weight:600; color:var(--text-dim); margin:12px 0 6px; }
+.hush-meter { position:relative; height:8px; border-radius:99px; background:#0D1912; border:1px solid var(--card-line); overflow:hidden; }
+.hush-meter > i { position:absolute; top:0; bottom:0; border-radius:99px; }
+.hush-meter .mid { position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background:rgba(238,246,240,.35); }
+.hush-rel-name { font-family:var(--serif); font-size:20px; }
+.hush-section-title { font-family:var(--serif); font-size:30px; line-height:1; margin:26px 0 6px; }
+.hush-section-title em { color:var(--poison); }
+.hush-link-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+
+/* ---------- popup event: full-screen drama on phones, centred on the web ---------- */
+.popup-event-sheet { background:var(--bg-glow), #050C08; border:1px solid var(--card-line); }
+.popup-event-kicker { color:var(--poison); }
+.popup-event-title { font-family:var(--serif); font-size:44px; line-height:.98; letter-spacing:-.015em; margin-top:12px; }
+.popup-event-title em { color:var(--poison); font-style:italic; text-shadow:0 0 22px rgba(43,224,122,.3); }
+.popup-event-body { color:#D6E4DA; font-size:15.5px; }
+.popup-choice { min-height:54px; background:var(--card-hi); border:1px solid var(--card-line); }
+.popup-choice-list .popup-choice:first-child { background:var(--emerald); border-color:rgba(43,224,122,.35); color:#fff;
+  box-shadow:0 10px 28px rgba(43,224,122,.22); }
+.popup-choice-list .popup-choice:first-child .popup-choice-desc { color:rgba(255,255,255,.78); }
+.popup-choice-label { font-weight:700; }
+@media (max-width:759px) {
+  .popup-event-scrim { align-items:stretch; }
+  .popup-event-sheet { max-width:none; width:100%; max-height:none; height:100%; border-radius:0 !important; border:0;
+    padding:calc(28px + env(safe-area-inset-top)) 20px calc(26px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; }
+  .popup-event-title { font-size:54px; }
+}
+@media (min-width:760px) {
+  .popup-event-scrim { align-items:center; justify-content:center; }
+  .popup-event-sheet { max-width:560px; padding:28px; }
+}
+
+/* overlays */
+.scrim { background:rgba(2,5,3,.78); }
+.sheet { background:var(--card-grad); border:1px solid var(--card-line); }
+.toast, .flash { background:#0D1A12; border:1px solid var(--gossip-line); color:var(--text); box-shadow:0 14px 36px rgba(0,0,0,.5); }
+@media (min-width:760px) { .scrim { align-items:center; } .sheet { max-width:600px; } }
 `;
 
 
@@ -1846,7 +2125,9 @@ function hue(str = "") {
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
   return h;
 }
-const avStyle = (s) => ({ background: `linear-gradient(140deg, hsl(${hue(s)} 45% 62%), hsl(${(hue(s) + 40) % 360} 40% 42%))` });
+/* hush: avatars sit in sage / green tones only */
+const greenHue = (s) => 95 + (hue(s) % 70);
+const avStyle = (s) => ({ background: `linear-gradient(140deg, hsl(${greenHue(s)} 24% 60%), hsl(${greenHue(s) + 18} 30% 34%))` });
 
 /* ---------- képek ---------- */
 const MediaCtx = React.createContext({ media: {}, addImage: () => null, mediaErr: "" });
@@ -2464,12 +2745,172 @@ async function shrink(
   }
 }
 
+/* hush logo: lowercase italic serif word + a softly glowing poison-green dot */
+function HushMark({ size }) {
+  return (
+    <div className="mark hush-mark" style={size ? { fontSize: size } : undefined} aria-label="hush">
+      hush<span className="hush-dot" aria-hidden="true">.</span>
+    </div>
+  );
+}
+
+/* hush screenplay: "*leans in* You came." -> an italic action line and a spoken line */
+function hushScreenplayParts(text, wholeIsAction) {
+  const value = String(text || "");
+  if (!/\*[^*]+\*/.test(value)) return [{ act: Boolean(wholeIsAction), text: value }];
+  return value.split(/(\*[^*]+\*)/).map((piece) => {
+    const isAct = /^\*[^*]+\*$/.test(piece);
+    const clean = (isAct ? piece.slice(1, -1) : piece).trim();
+    return clean ? { act: isAct, text: clean } : null;
+  }).filter(Boolean);
+}
+
+/* hush: a dramatic title with one word in italic poison green (the last one) */
+function hushAccentTitle(title) {
+  const words = String(title || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return <em>{words.join(" ")}</em>;
+  const last = words.pop();
+  return <>{words.join(" ")} <em>{last}</em></>;
+}
+
+/* hush: the gossip posts of the world, best believed first */
+function hushGossipPosts(w) {
+  return (w && Array.isArray(w.posts) ? w.posts : []).filter((p) => p && p.gossipStory);
+}
+function hushGossipTitle(p) {
+  const story = (p && p.gossipStory) || {};
+  return String(story.headline || "").trim() || cut(String((p && p.text) || "").replace(/\s+/g, " "), 90);
+}
+
+/* hush right rail (1100px and up): the top of the whisper wall */
+function HushRail({ w, onOpenPost, onGo }) {
+  const { tt } = useLang();
+  const top = hushGossipPosts(w)
+    .map((p) => ({ p, likes: Number(displayPostLikeCount(w, p)) || 0 }))
+    .sort((a, b) => b.likes - a.likes || (Number(b.p.ts) || 0) - (Number(a.p.ts) || 0))
+    .slice(0, 3);
+  return (
+    <div className="card hush-whisper" style={{ marginTop: 0 }}>
+      <h4>{tt("A fal teteje", "Top of the wall")}</h4>
+      {top.length ? top.map(({ p }, i) => (
+        <div key={p.id} className="hush-top-row" role="button" tabIndex={0}
+          onClick={() => onOpenPost && onOpenPost(p.id)}
+          onKeyDown={(e) => { if (e.key === "Enter" && onOpenPost) onOpenPost(p.id); }}>
+          <span className="hush-top-num">{i + 1}</span>
+          <div style={{ minWidth: 0 }}>
+            <div className="hush-top-title">{hushGossipTitle(p)}</div>
+            <div className="hint" style={{ marginTop: 3 }}>{timeAgo(p.ts)}</div>
+          </div>
+        </div>
+      )) : (
+        <div className="hint">{tt("Még üres a fal.", "The wall is still empty.")}</div>
+      )}
+      <button type="button" className="btn tiny ghost full" style={{ marginTop: 10 }} onClick={() => onGo && onGo("gossip")}>
+        {tt("Suttogó fal", "Whisper wall")}
+      </button>
+    </div>
+  );
+}
+
+/* a centred meter: right of the middle line poison green (positive), left blue-grey (negative) */
+function HushMeter({ value, label, max = 100, signed = true }) {
+  const v = Math.max(-max, Math.min(max, Number(value) || 0));
+  const pct = (Math.abs(v) / max) * 50;
+  const positive = v >= 0;
+  const left = signed ? (positive ? 50 : 50 - pct) : 0;
+  const width = signed ? pct : (Math.abs(v) / max) * 100;
+  return (
+    <div>
+      {label ? <div className="hush-meter-label"><span>{label}</span><span className="mono">{Math.round(v)}</span></div> : null}
+      <div className="hush-meter">
+        {signed ? <span className="mid" /> : null}
+        <i style={{ left: left + "%", width: width + "%", background: positive ? "var(--poison)" : "var(--neg)",
+          boxShadow: positive ? "0 0 10px rgba(43,224,122,.45)" : "none" }} />
+      </div>
+    </div>
+  );
+}
+
+/* hush "Me": name, reputation, how the others feel about you, and what they whisper about you */
+function MeProfile({ w, onGo, onCompose, onOpenWorlds, onOpenPost }) {
+  const { tt } = useLang();
+  const me = w.player || {};
+  const stats = (w.socialStats && w.socialStats[w.meId]) || defaultSocialStatsRow();
+  const bonds = (w.chars || [])
+    .filter((c) => c && c.id && !isHuman(w, c.id) && !isMediaAccount(w, c.id))
+    .map((c) => ({ c, rel: getRel(w, c.id, w.meId) || EMPTY_REL }))
+    .filter(({ rel }) => hasEstablishedBond(rel))
+    .sort((a, b) => Math.abs(Number(b.rel.score) || 0) - Math.abs(Number(a.rel.score) || 0))
+    .slice(0, 8);
+  const aboutMe = hushGossipPosts(w)
+    .filter((p) => ((p.gossipStory && p.gossipStory.mentionedIds) || []).map(String).includes(String(w.meId)))
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))
+    .slice(0, 6);
+  return (
+    <div style={{ paddingTop: 6 }}>
+      <div className="row" style={{ alignItems: "flex-end", gap: 14 }}>
+        <Av src={me.avatar} name={me.name} size={72} />
+        <div style={{ minWidth: 0 }}>
+          <h1 className="hush-me-name">{me.name}</h1>
+          <div className="hush-me-handle">@{me.username}</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <HushMeter label={tt("Hírnév", "Reputation")} value={Number(stats.reputation) || 0} max={30} />
+      </div>
+
+      <h2 className="hush-section-title">{tt("Kapcsolatok", "Bonds")}</h2>
+      {bonds.length ? bonds.map(({ c, rel }) => {
+        const levels = rel.levels || {};
+        const trust = Number(levels.trust != null ? levels.trust : rel.trust) || 0;
+        const tension = Number(levels.tension != null ? levels.tension : rel.tension) || 0;
+        const attraction = Number(levels.attraction != null ? levels.attraction : rel.attraction) || 0;
+        return (
+          <div className="card" key={c.id}>
+            <div className="row" style={{ alignItems: "center" }}>
+              <Av src={c.avatar} name={c.name} size={34} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="hush-rel-name">{c.name}</div>
+                {rel.label || rel.mood ? <div className="hint">{rel.label || rel.mood}</div> : null}
+              </div>
+            </div>
+            <HushMeter label={tt("Érzés irántad", "How they feel")} value={Number(rel.score) || 0} />
+            {trust ? <HushMeter label={tt("Bizalom", "Trust")} value={trust} /> : null}
+            {tension ? <HushMeter label={tt("Feszültség", "Tension")} value={-tension} /> : null}
+            {attraction ? <HushMeter label={tt("Vonzalom", "Attraction")} value={attraction} /> : null}
+          </div>
+        );
+      }) : <div className="hint" style={{ marginTop: 8 }}>{tt("Még senkivel nincs kialakult kapcsolatod.", "No bonds have formed yet.")}</div>}
+
+      <h2 className="hush-section-title">{tt("Amit rólad ", "What they ")}<em>{tt("suttognak", "whisper")}</em>{tt("", " about you")}</h2>
+      {aboutMe.length ? aboutMe.map((p) => (
+        <div key={p.id} className="card" role="button" tabIndex={0} style={{ cursor: "pointer", background: "var(--gossip-bg)", borderColor: "var(--gossip-line)" }}
+          onClick={() => onOpenPost && onOpenPost(p.id)}
+          onKeyDown={(e) => { if (e.key === "Enter" && onOpenPost) onOpenPost(p.id); }}>
+          <div className="hush-top-title" style={{ fontFamily: "var(--serif)", fontSize: 20 }}>{hushGossipTitle(p)}</div>
+          <div className="hint" style={{ marginTop: 4 }}>{timeAgo(p.ts)}</div>
+        </div>
+      )) : <div className="hint" style={{ marginTop: 8 }}>{tt("Rólad még nem suttognak.", "Nobody is whispering about you yet.")}</div>}
+
+      <div className="hush-link-row">
+        <button type="button" className="btn primary" onClick={onCompose}><Plus size={15} /> {tt("Suttogj valamit", "Whisper something")}</button>
+        <button type="button" className="btn" onClick={() => onGo("chat")}>{tt("Suttogások", "Whispers")}</button>
+        <button type="button" className="btn" onClick={() => onGo("cast")}>{tt("Karakterek és saját lapom", "Characters & my sheet")}</button>
+        <button type="button" className="btn" onClick={() => onGo("bonds")}>{tt("Kapcsolatok", "Bonds")}</button>
+        <button type="button" className="btn" onClick={() => onGo("world")}>{tt("Világ és beállítások", "World & settings")}</button>
+        <button type="button" className="btn ghost" onClick={onOpenWorlds}>{tt("Világaim", "My worlds")}</button>
+      </div>
+    </div>
+  );
+}
+
 function Av({ src, name = "?", size = 38, radius = 12 }) {
   const { media } = useMedia();
   const [bad, setBad] = useState(false);
   const url = resolveImg(src, media);
   return (
-    <div className="av" style={{ ...avStyle(name), width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.42) }}>
+    <div className="av" style={{ ...avStyle(name), width: size, height: size, borderRadius: Math.round(size * 0.32), fontSize: Math.round(size * 0.5) }}>
       {url && !bad ? <img src={url} alt="" onError={() => setBad(true)} /> : (name || "?")[0]}
     </div>
   );
@@ -7681,7 +8122,7 @@ function AlbumEditor({ value, onChange, owner }) {
                   top: 4,
                   right: 4,
                   padding: "3px 6px",
-                  background: "rgba(10,9,16,.85)",
+                  background: "rgba(4,9,6,.85)",
                 }}
                 onClick={() =>
                   onChange(
@@ -7698,7 +8139,7 @@ function AlbumEditor({ value, onChange, owner }) {
                   position: "absolute",
                   bottom: 4,
                   left: 4,
-                  background: "rgba(10,9,16,.85)",
+                  background: "rgba(4,9,6,.85)",
                 }}
               >
                 {tt(`kép ${i + 1}`, `image ${i + 1}`)}
@@ -20041,8 +20482,8 @@ function createRepost(
           sysLangText(
             w,
             post.authorId,
-            `${actor.name} újraosztotta a posztodat.`,
-            `${actor.name} reposted your post.`
+            `${actor.name} továbbsuttogta a posztodat.`,
+            `${actor.name} passed your post on.`
           ),
         link: {
           type: "post",
@@ -24114,7 +24555,7 @@ function Boot({ onReady, prefill, lang, onLang, bootErr }) {
   return (
     <div className="mv-wrap" style={{ justifyContent: "center", padding: "0 18px", overflowY: "auto" }}>
       <div style={{ textAlign: "center", marginBottom: 6 }}>
-        <div className="mark" style={{ fontSize: 40 }}>más<i>világ</i></div>
+        <HushMark size={46} />
         <div className="hdr-meta" style={{ marginTop: 6 }}>{tt("AI-lakta közösségi média", "AI-inhabited social media")}</div>
       </div>
 
@@ -24506,7 +24947,7 @@ function Post({
               </button>
               <span className="handle mono">@{author.username}</span>
               <span className="social-dot-sep">·</span>
-              <span className="handle mono">{timeAgo(post.ts)}</span>
+              <span className="social-post-time">{timeAgo(post.ts)}</span>
 
               {post.virality &&
               post.virality.status &&
@@ -24643,19 +25084,19 @@ function Post({
         <button
           className={"social-action" + (liked ? " liked" : "")}
           onClick={() => onLike(post.id)}
-          aria-label={tt("Kedvelés", "Like")}
+          aria-label={tt("Elhiszem", "Believe")}
         >
-          <Heart size={17} fill={liked ? "currentColor" : "none"} />
-          <span>{formatSocialCount(displayPostLikeCount(w, post))}</span>
+          <span>{tt("Elhiszem", "Believe")}</span>
+          <span className="hush-n">{formatSocialCount(displayPostLikeCount(w, post))}</span>
         </button>
 
         <button
           className="social-action"
           onClick={() => commentInput.current && commentInput.current.focus()}
-          aria-label={tt("Hozzászólás", "Comment")}
+          aria-label={tt("Válasz", "Reply")}
         >
-          <MessageCircle size={17} />
-          <span>{comments.length}</span>
+          <span>{tt("Válasz", "Reply")}</span>
+          <span className="hush-n">{comments.length}</span>
         </button>
 
         <button
@@ -24677,12 +25118,12 @@ function Post({
           }}
           disabled={reposted}
           aria-label={tt(
-            "Újraosztás",
-            "Repost"
+            "Továbbsuttog",
+            "Pass it on"
           )}
         >
-          <RefreshCcw size={17} />
-          <span>{reposts}</span>
+          <span>{tt("Továbbsuttog", "Pass it on")}</span>
+          <span className="hush-n">{reposts}</span>
         </button>
 
         {post.reach && Number(post.reach.impressions) > 0 ? (
@@ -24881,7 +25322,7 @@ function SocialProfileModal({
             className="social-cover"
             style={{
               background:
-                `radial-gradient(circle at 18% 15%, hsla(${hue(c.username || c.name)}, 70%, 65%, .42), transparent 35%), linear-gradient(135deg, hsl(${hue(c.name)} 32% 19%), hsl(${(hue(c.name) + 55) % 360} 38% 10%))`,
+                `radial-gradient(circle at 18% 15%, hsla(${greenHue(c.username || c.name)}, 60%, 55%, .34), transparent 38%), linear-gradient(135deg, hsl(${greenHue(c.name)} 34% 16%), hsl(${greenHue(c.name) + 20} 40% 8%))`,
             }}
           >
             {coverUrl ? (
@@ -30135,9 +30576,12 @@ function AlbumPick({ items, value, onPick }) {
   );
 }
 
-function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal }) {
+function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal, mode = "feed", composeOpen = false, onCompose, onComposeClose }) {
   const { tt } = useLang();
   const { media } = useMedia();
+  /* hush: the same feed, shown as the gossip "Whisper wall" when mode === "gossip" */
+  const wallMode = mode === "gossip";
+  const [wallFilter, setWallFilter] = useState("all");
   const [text, setText] = useState("");
   const [img, setImg] = useState("");
   const [busy, setBusy] = useState("");
@@ -30341,6 +30785,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     setText("");
     setImg("");
     setBusy("");
+    if (onComposeClose) onComposeClose();
   };
 
   const advance = () => {
@@ -30364,8 +30809,18 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     return set;
   }, [w, w.meId]);
 
+  const wallNow = now();
   const basePosts =
-    feedMode === "following"
+    wallMode
+      ? (w.posts || []).filter((p) => {
+          if (!p || !p.gossipStory) return false;
+          const story = p.gossipStory;
+          if (wallFilter === "fresh") return wallNow - (Number(p.ts) || 0) <= 24 * 60 * 60 * 1000;
+          if (wallFilter === "confirmed") return String(story.factLevel || "") === "observed";
+          if (wallFilter === "about") return (story.mentionedIds || []).map(String).includes(String(w.meId));
+          return true;
+        })
+      : feedMode === "following"
       ? (w.posts || []).filter((p) =>
           p && (p.authorId === w.meId || followingIds.has(p.authorId))
         )
@@ -30379,7 +30834,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
     repost: null,
   }));
 
-  const repostItems = repostRows(w)
+  const repostItems = (wallMode ? [] : repostRows(w))
     .map((repost) => {
       const post = postById.get(repost.postId);
       const reposter = socialProfileById(w, repost.actorId);
@@ -30420,26 +30875,17 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
   return (
     <>
-      <div className="social-feed-head">
-        <div className="social-feed-title">
-          <div>
-            <div className="name" style={{ fontSize: 16 }}>
-              {tt("Hírfolyam", "Feed")}
-            </div>
-            <div className="handle mono">@{w.player.username}</div>
+      {wallMode ? (
+        <div className="hush-wall-head">
+          <h1 className="hush-wall-title">{tt("Suttogó", "Whisper")} <em>{tt("fal", "wall")}</em></h1>
+          <div className="hush-filters">
+            {[["all", tt("Mind", "All")], ["fresh", tt("Friss", "Fresh")], ["confirmed", tt("Megerősített", "Confirmed")], ["about", tt("Rólad", "About you")]].map(([k, label]) => (
+              <button key={k} type="button" className={"hush-pill" + (wallFilter === k ? " on" : "")} onClick={() => setWallFilter(k)}>{label}</button>
+            ))}
           </div>
-
-          {autoOn ? (
-            <span className="chip">
-              <span
-                className="dot"
-                style={{ display: "inline-block", marginRight: 5 }}
-              />
-              {tt("élő", "live")}
-            </span>
-          ) : null}
         </div>
-
+      ) : (
+      <div className="social-feed-head">
         <div className="social-feed-tabs">
           <button
             className={
@@ -30448,7 +30894,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             }
             onClick={() => setFeedMode("all")}
           >
-            {tt("Neked", "For you")}
+            {tt("Ma éjjel", "Tonight")}
           </button>
 
           <button
@@ -30458,11 +30904,23 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             }
             onClick={() => setFeedMode("following")}
           >
-            {tt("Követések", "Following")}
+            {tt("Követett", "Following")}
           </button>
+
+          {autoOn ? (
+            <span className="chip" style={{ marginLeft: "auto", alignSelf: "center" }}>
+              <span
+                className="dot"
+                style={{ display: "inline-block", marginRight: 5 }}
+              />
+              {tt("élő", "live")}
+            </span>
+          ) : null}
         </div>
       </div>
+      )}
 
+      {wallMode ? null : (
       <NotesStrip
         w={w}
         update={update}
@@ -30472,8 +30930,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         onRequestNoteReactions={onRequestNoteReactions}
         onSignal={onSignal}
       />
+      )}
 
-      {activeMedia ? (
+      {activeMedia && wallMode ? (
         <div className="social-media-account-bar">
           <button
             type="button"
@@ -30596,7 +31055,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       ) : null}
 
-      {activeTrends.length ? (
+      {activeTrends.length && !wallMode ? (
         <div className="social-trends">
           <div className="social-trends-head">
             <Zap size={11} />
@@ -30631,6 +31090,13 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       ) : null}
 
+      {composeOpen && !wallMode ? (
+      <div className="hush-compose-scrim" onClick={(e) => { if (e.target === e.currentTarget && onComposeClose) onComposeClose(); }}>
+      <div className="hush-compose" role="dialog" aria-label={tt("Suttogj valamit", "Whisper something")}>
+        <div className="between">
+          <h2 className="hush-compose-title">{tt("Suttogj valamit", "Whisper something")}</h2>
+          <button type="button" className="btn tiny ghost" onClick={() => onComposeClose && onComposeClose()} aria-label={tt("Bezárás", "Close")}><X size={16} /></button>
+        </div>
       <div className="social-composer">
         <div className="social-composer-main">
           <button
@@ -30693,14 +31159,21 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
             disabled={busy === "posting" || (!text.trim() && !img)}
           >
             <Send size={14} />
-            {tt("Közzététel", "Post")}
+            {tt("Elsuttogom", "Whisper it")}
           </button>
         </div>
       </div>
+      </div>
+      </div>
+      ) : null}
 
       {timelineItems.length === 0 ? (
         <div className="social-empty">
-          {feedMode === "following"
+          {wallMode
+            ? (activeMedia
+                ? tt("Még senki nem suttog semmit. Ami történik a világban, ide kerül.", "Nobody is whispering yet. What happens in the world lands here.")
+                : tt("A Suttogó fal a Világ fülön, a Gossip & Media résznél kapcsolható be.", "Turn the Whisper wall on in the World tab, under Gossip & Media."))
+            : feedMode === "following"
             ? tt(
                 "Még nincs poszt azoktól, akiket követsz.",
                 "There are no posts from people you follow yet."
@@ -30712,7 +31185,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         </div>
       ) : null}
 
-      {visibleTimelineItems.map((item) => {
+      {visibleTimelineItems.map((item, itemIndex) => {
         const p = item.post;
 
         const reposter =
@@ -30726,9 +31199,9 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
         return (
           <div
             className={
-              item.repost
+              (item.repost
                 ? "social-repost-wrap"
-                : ""
+                : "") + (wallMode && itemIndex === 0 ? " hush-wall-lead-wrap" : "")
             }
             key={item.id}
           >
@@ -30745,8 +31218,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
                   }
                 >
                   {tt(
-                    `${reposter.name} újraosztotta`,
-                    `${reposter.name} reposted`
+                    `${reposter.name} továbbsuttogta`,
+                    `${reposter.name} passed it on`
                   )}
                 </button>
               </div>
@@ -31183,7 +31656,7 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
           <span style={{ fontSize: 12.5, color: "var(--bone)" }}>{label}</span>
           <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score}</span>
         </div>
-        <div style={{ fontFamily: "Fraunces, Georgia, serif", fontSize: 15, color: r.label || r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
+        <div style={{ fontFamily: "var(--serif)", fontSize: 15, color: r.label || r.mood ? "var(--rose)" : "var(--muted)", marginBottom: 6 }}>
           {r.label
             ? String(r.label)
             : r.mood
@@ -31828,7 +32301,7 @@ function CharDetail({ w, c, update, onClose, onEdit, onChat }) {
             className="social-cover"
             style={{
               background:
-                `radial-gradient(circle at 18% 15%, hsla(${hue(c.username || c.name)}, 70%, 65%, .42), transparent 35%), linear-gradient(135deg, hsl(${hue(c.name)} 32% 19%), hsl(${(hue(c.name) + 55) % 360} 38% 10%))`,
+                `radial-gradient(circle at 18% 15%, hsla(${greenHue(c.username || c.name)}, 60%, 55%, .34), transparent 38%), linear-gradient(135deg, hsl(${greenHue(c.name)} 34% 16%), hsl(${greenHue(c.name) + 20} 40% 8%))`,
             }}
           >
             {coverUrl ? (
@@ -34303,6 +34776,11 @@ function Scene({ w, scene, update, setErr, onBack, onSignal }) {
   const [busy, setBusy] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [clockNow, setClockNow] = useState(now());
+  /* hush: on wide screens the scene sheet (cast + close button) sits in the right rail */
+  const [hushRailNode, setHushRailNode] = useState(null);
+  useEffect(() => {
+    if (typeof document !== "undefined") setHushRailNode(document.getElementById("hush-rail-scene"));
+  }, []);
   const endRef = useRef(null);
   const sendLockRef = useRef(false);
   const [optimisticTurns, setOptimisticTurns] = useState([]);
@@ -35635,15 +36113,25 @@ Formátum:
       {visibleTurns.length === 0 && <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>{tt("Kezdd el: írd meg, mit tesz a karaktered — vagy hagyd, hogy ők kezdjenek.", "Get started: write what your character does — or let them start.")}</p>}
 
       {visibleTurns.map((t, i) => {
-        if (t.authorId === "narrator") return <p className="narr" key={i}>{t.text}</p>;
+        if (t.authorId === "narrator") return (
+          <React.Fragment key={t.id || i}>
+            <p className="narr">{t.text}</p>
+            <div className="hush-divider" aria-hidden="true"><span /></div>
+          </React.Fragment>
+        );
         const a = t.authorId === w.meId ? w.player : who(t.authorId);
         if (!a) return null;
+        /* hush screenplay: the name, then the *action* in italics, then the spoken line */
         return (
-          <div className="turn" key={t.id || i}>
+          <div className={"turn" + (t.authorId === w.meId ? " hush-me" : "")} key={t.id || i}>
             <Av src={a.avatar} name={a.name} size={30} radius={10} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <div className="turn-name">{a.name}</div>
-              <div className={t.kind === "action" ? "turn-act" : ""} style={{ fontSize: 14.5, whiteSpace: "pre-wrap" }}>{t.text}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>
+                {hushScreenplayParts(t.text, t.kind === "action").map((part, k) => (
+                  <span key={k} className={part.act ? "hush-act" : "hush-say"}>{part.text}</span>
+                ))}
+              </div>
             </div>
           </div>
         );
@@ -35684,11 +36172,13 @@ Formátum:
 
       {scene.open ? (
         <div className="card">
-          <textarea className="i" value={text} placeholder={tt(`Mit tesz vagy mond ${w.player.name}?`, `What does ${w.player.name} do or say?`)} onChange={(e) => setText(e.target.value)} />
-          <div className="row" style={{ marginTop: 10, gap: 8 }}>
-            <button className="btn primary full" onClick={() => advance(text.trim())} disabled={!!busy || !text.trim()}>
-              {busy === "turn" ? <Loader2 size={14} className="spin" /> : <Send size={14} />} {tt("Lépés", "Step")}
+          <div className="hush-scene-input">
+            <textarea className="i" value={text} placeholder={tt("Írd le, mit teszel vagy mondasz…", "Describe what you do or say\u2026")} onChange={(e) => setText(e.target.value)} />
+            <button className="btn primary hush-send" onClick={() => advance(text.trim())} disabled={!!busy || !text.trim()} aria-label={tt("Lépés", "Step")} title={tt("Lépés", "Step")}>
+              {busy === "turn" ? <Loader2 size={18} className="spin" /> : <Send size={18} />}
             </button>
+          </div>
+          <div className="row" style={{ marginTop: 10, gap: 8 }}>
             <button className="btn full" onClick={() => advance("")} disabled={!!busy} title={tt("A többiek lépnek", "The others take a turn")}>
               <Sparkles size={14} color="var(--gold)" /> {tt("Történjen valami", "Make something happen")}
             </button>
@@ -35710,6 +36200,32 @@ Formátum:
           <ChevronLeft size={14} /> {tt("Vissza az Eventekhez", "Back to Events")}
         </button>
       )}
+
+      {hushRailNode ? createPortal(
+        <div className="card hush-whisper" style={{ marginTop: 0 }}>
+          <h4>{scene.title}</h4>
+          {scene.setting ? <p className="hint" style={{ marginTop: 0, color: "var(--absinthe)" }}>{scene.setting}</p> : null}
+          <label className="f" style={{ marginTop: 10 }}>{tt("Szereplők", "Cast")}</label>
+          <div className="row" style={{ alignItems: "center", marginTop: 6 }}>
+            <Av src={w.player.avatar} name={w.player.name} size={30} />
+            <span style={{ fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 18, color: "var(--poison)" }}>{w.player.name}</span>
+          </div>
+          {cast.map((c) => (
+            <div key={c.id} className="row" style={{ alignItems: "center", marginTop: 6 }}>
+              <Av src={c.avatar} name={c.name} size={30} />
+              <span style={{ fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 18, color: "var(--absinthe)" }}>{c.name}</span>
+            </div>
+          ))}
+          {scene.open ? (
+            <button className={"btn full " + (eventProgress.complete ? "primary" : "")} style={{ marginTop: 14 }}
+              onClick={() => finish(!eventProgress.complete)} disabled={!!busy}>
+              {busy === "end" ? <Loader2 size={13} className="spin" /> : null}
+              {tt("Scene lezárása", "Close scene")}
+            </button>
+          ) : null}
+        </div>,
+        hushRailNode
+      ) : null}
     </>
   );
 }
@@ -36639,7 +37155,7 @@ ${hist || ""}`
   return (
     <>
       <div className="between" style={{ position: "sticky", top: 0, background: "var(--ink)", padding: "10px 0", zIndex: 5 }}>
-        <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Üzenetek", "Messages")}</button>
+        <button className="btn tiny ghost" onClick={onBack}><ChevronLeft size={14} /> {tt("Suttogások", "Whispers")}</button>
         <div className="row" style={{ alignItems: "center", gap: 6 }}>
           <span className="name" style={{ fontSize: 13.5 }}>
             {group.name}
@@ -38300,6 +38816,10 @@ if (group) {
           ck,
           last,
           fresh,
+          /* hush: how many unread whispers wait in this conversation */
+          unreadCount: fresh
+            ? Math.max(1, (w.chats[ck] || []).filter((m) => m && m.from === "them" && Number(m.ts) > Number((w.seen && w.seen[ck]) || 0)).length)
+            : 0,
           rel:
             getRel(
               w,
@@ -38336,18 +38856,12 @@ if (group) {
             marginTop:12,
           }}
         >
-          <label
-            className="f"
-            style={{
-              margin:0,
-              color:"var(--gold)",
-            }}
-          >
+          <h1 className="hush-wall-title" style={{ fontSize: 44, margin: "6px 0 0" }}>
             {tt(
-              "Beszélgetések",
-              "Messages"
+              "Suttogások",
+              "Whispers"
             )}
-          </label>
+          </h1>
 
           <button
             type="button"
@@ -38606,17 +39120,13 @@ if (group) {
 
           return (
             <div
-              className="card"
+              className={"card hush-dm-row" + (fresh ? " fresh" : "")}
               key={"dm:" + x.id}
               onClick={() =>
                 setOpenId(x.id)
               }
               style={{
                 cursor:"pointer",
-                borderColor:
-                  fresh
-                    ? "var(--rose)"
-                    : "var(--line)",
               }}
             >
               <div className="row">
@@ -38645,7 +39155,7 @@ if (group) {
                       </div>
 
                       {fresh ? (
-                        <span className="dot" />
+                        <span className="hush-dm-count">{Math.min(99, row.unreadCount || 1)}</span>
                       ) : null}
                     </div>
 
@@ -38706,7 +39216,7 @@ if (group) {
   return (
     <>
       <div className="between" style={{ position: "sticky", top: 0, background: "var(--ink)", padding: "10px 0", zIndex: 5 }}>
-        <button className="btn tiny ghost" onClick={() => setOpenId(null)}><ChevronLeft size={14} /> {tt("Üzenetek", "Messages")}</button>
+        <button className="btn tiny ghost" onClick={() => setOpenId(null)}><ChevronLeft size={14} /> {tt("Suttogások", "Whispers")}</button>
         <div className="row" style={{ alignItems: "center", gap: 8 }}>
           <div style={{ textAlign: "right" }}>
             <div className="name">
@@ -39068,10 +39578,11 @@ function PopupEventModal({ w, event, update, onChoose, onReroll, onCustom }) {
           <div style={{ minWidth: 0 }}>
             <div className="popup-event-kicker">
               <Sparkles size={12} />
+              {event.icon ? <span aria-hidden="true">{event.icon}</span> : null}
               {tt("Váratlan helyzet","Unexpected situation")}
             </div>
             <div className="popup-event-title">
-              {event.icon || "⚡"} {event.title}
+              {hushAccentTitle(event.title)}
             </div>
             {(event.location || event.visibility) ? (
               <div className="hint" style={{ marginTop: 5 }}>
@@ -39710,8 +40221,8 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
           {tt(
-            "Nincs Standard/18+ kapcsoló: a MÁSVILÁG alapból felnőtteknek szánt social-RPG. A karakterhű történetben lehet erősebb nyelvezet, sötétebb tematika, toxikus dinamika, erőszak és felnőtt romantikus feszültség. A rendszer kiskorút nem szexualizál; az intimitás explicitségét csak az AI-szolgáltató saját szabályai korlátozzák.",
-            "There is no Standard/18+ switch: MÁSVILÁG is an adult-rated social RPG by default. Character-accurate stories may use stronger language, darker themes, toxic dynamics, violence, and adult romantic tension. Minors are never sexualized; how explicit intimacy gets is limited only by the AI provider's own rules."
+            "Nincs Standard/18+ kapcsoló: a hush alapból felnőtteknek szánt social-RPG. A karakterhű történetben lehet erősebb nyelvezet, sötétebb tematika, toxikus dinamika, erőszak és felnőtt romantikus feszültség. A rendszer kiskorút nem szexualizál; az intimitás explicitségét csak az AI-szolgáltató saját szabályai korlátozzák.",
+            "There is no Standard/18+ switch: hush is an adult-rated social RPG by default. Character-accurate stories may use stronger language, darker themes, toxic dynamics, violence, and adult romantic tension. Minors are never sexualized; how explicit intimacy gets is limited only by the AI provider's own rules."
           )}
         </p>
       </div>
@@ -57117,6 +57628,8 @@ export default function App() {
   const lastSavedContent = useRef("");
   const [showRooms, setShowRooms] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
+  /* hush: the "Suttogj valamit" composer opens as its own screen */
+  const [composeOpen, setComposeOpen] = useState(false);
   const [auto, setAutoCfg] = useState(AUTO_DEFAULT);
   const [autoBusy, setAutoBusy] = useState(false);
   const autoRunning = useRef(false);
@@ -60594,7 +61107,7 @@ const signOut = useCallback(async () => {
         <style>{CSS}</style>
         <div className="mv-wrap" style={{ justifyContent: "center", padding: "0 18px", overflowY: "auto" }}>
           <div style={{ textAlign: "center", marginTop: 24 }}>
-            <div className="mark" style={{ fontSize: 36 }}>más<i>világ</i></div>
+            <HushMark size={42} />
             <p className="hint" style={{ marginTop: 10 }}>{tt("Betöltés…", "Loading\u2026")}</p>
           </div>
         </div>
@@ -60622,8 +61135,20 @@ const signOut = useCallback(async () => {
   viewRef.current = view;
   const activePopup = editLocked ? null : currentPopupEvent(view);
 
-  const TABS = [["feed", tt("Feed", "Feed"), Home], ["cast", tt("Karakterek", "Characters"), Users], ["bonds", tt("Kapcsolat", "Bonds"), Network],
-    ["scene", tt("Jelenet", "Scene"), Film], ["chat", tt("Üzenetek", "Messages"), MessageCircle], ["world", tt("Világ", "World"), Globe2]];
+  /* hush navigation: the main screens, then the older tabs that keep every feature reachable */
+  const unreadDms = groundedUnreadDmCount(view);
+  const SIDE_MAIN = [["feed", tt("Feed", "Feed")], ["gossip", tt("Suttogó fal", "Whisper wall")], ["scene", tt("Scene-ek", "Scenes")],
+    ["chat", tt("Suttogások", "Whispers")], ["me", tt("Én", "Me")]];
+  const SIDE_SUB = [["cast", tt("Karakterek", "Characters")], ["bonds", tt("Kapcsolatok", "Bonds")], ["world", tt("Világ", "World")]];
+  const MOBILE_TABS = [["feed", tt("Feed", "Feed")], ["gossip", tt("Pletyka", "Gossip")], ["scene", tt("Scene", "Scene")], ["me", tt("Én", "Me")]];
+  const worldClockText = [world.universe && world.universe.date, world.universe && world.universe.year].filter(Boolean).join(" · ") || tt("ma éjjel", "tonight");
+  const openCompose = () => { setTab("feed"); setComposeOpen(true); };
+  const goTab = (k) => {
+    setComposeOpen(false);
+    setTab(k);
+    /* a new screen starts at its top */
+    try { const main = document.querySelector(".mv-main"); if (main) main.scrollTop = 0; } catch (error) { /* no DOM */ }
+  };
 
   const markRead = (id) => update((n) => {
     const list = (n.notify && n.notify[meId]) || [];
@@ -60653,14 +61178,34 @@ const signOut = useCallback(async () => {
     <MediaCtx.Provider value={{ media, addImage }}>
     <div className="mv">
       <style>{CSS}</style>
+      <div className="hush-shell">
+      <aside className="hush-side" aria-label={tt("Menü", "Menu")}>
+        <HushMark />
+        <span className="hush-clock" title={tt("Játékbeli idő", "In-game time")}><Moon size={13} /> {worldClockText}</span>
+        {SIDE_MAIN.map(([k, label]) => (
+          <button key={k} type="button" className={"hush-side-item" + (tab === k ? " on" : "")} onClick={() => goTab(k)}>
+            <span>{label}</span>
+            {k === "chat" && unreadDms > 0 ? <span className="hush-count">{Math.min(99, unreadDms)}</span> : null}
+          </button>
+        ))}
+        <div className="hush-side-sep" />
+        {SIDE_SUB.map(([k, label]) => (
+          <button key={k} type="button" className={"hush-side-item sub" + (tab === k ? " on" : "")} onClick={() => goTab(k)}>
+            <span>{label}</span>
+          </button>
+        ))}
+        <button type="button" className="btn primary full hush-whisper-btn" onClick={openCompose}>
+          <Plus size={16} /> {tt("Suttogj valamit", "Whisper something")}
+        </button>
+      </aside>
       <div className="mv-wrap">
         <div className="hdr">
           <div className="hdr-row">
-            <div style={{ minWidth: 0 }}>
-              <div className="mark">más<i>világ</i></div>
-              <div className="hdr-meta">{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_VERSION}</span></div>
-              <div className="hint" style={{ marginTop: 4 }}>{saveLabel}{saveAt ? ` · ${timeAgo(saveAt)}` : ""}</div>
+            <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <HushMark />
+              <span className="hush-clock" title={tt("Játékbeli idő", "In-game time")}><Moon size={13} /> {worldClockText}</span>
             </div>
+            <div className="hush-hdr-actions">
             <button className="btn tiny ghost" onClick={() => changeAuto({ on: !auto.on })}
               title={auto.on ? tt("Élő világ: magától történnek dolgok", "Live world: things happen on their own") : tt("Élő világ kikapcsolva", "Live world off")}
               style={{ color: auto.on ? "var(--rose)" : "var(--muted)" }}>
@@ -60668,11 +61213,18 @@ const signOut = useCallback(async () => {
                         : <span className="dot" style={{ background: auto.on ? "var(--rose)" : "var(--muted)", animation: auto.on ? undefined : "none" }} />}
             </button>
             <AiStatusChip />
+            <button className="btn tiny ghost hush-icon-btn hush-mobile-only" onClick={() => goTab("chat")} title={tt("Suttogások", "Whispers")}>
+              <MessageCircle size={16} color={tab === "chat" ? "var(--poison)" : undefined} />
+              {unreadDms > 0 && <span className="badge">{unreadDms > 9 ? "9+" : unreadDms}</span>}
+            </button>
             <button className="btn tiny ghost" style={{ position: "relative" }} onClick={() => setShowNotes(true)} title={tt("Értesítések", "Notifications")}>
               <Bell size={15} color={unread ? "var(--rose)" : undefined} />
               {unread > 0 && <span className="badge">{unread > 9 ? "9+" : unread}</span>}
             </button>
+            </div>
           </div>
+          <div className="hdr-meta" style={{ marginTop: 6 }}>{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_VERSION}</span></div>
+          <div className="hint" style={{ marginTop: 2 }}>{saveLabel}{saveAt ? ` · ${timeAgo(saveAt)}` : ""}</div>
           {world.log.length > 0 && (
             <div className="ticker">
               <span className="ticker-tag"><span className="dot" /> {tt("ÉLŐ", "LIVE")}</span>
@@ -60682,12 +61234,17 @@ const signOut = useCallback(async () => {
         </div>
 
         <div className="mv-main">
-          {tab === "feed" && <Feed w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
+          {(tab === "feed" || tab === "gossip") && <Feed key={tab} mode={tab === "gossip" ? "gossip" : "feed"} w={view} update={update} setErr={setErr} jump={jump} autoOn={auto.on}
             onOpenChat={(id) => { setChatId(id); setTab("chat"); }}
             onOpenWorlds={() => setShowRooms(true)}
             onRequestWorldStep={requestWorldStep}
             onRequestNoteReactions={requestNoteReactions}
-            onSignal={signalSimulation} />}
+            onSignal={signalSimulation}
+            composeOpen={composeOpen && tab === "feed"}
+            onCompose={openCompose}
+            onComposeClose={() => setComposeOpen(false)} />}
+          {tab === "me" && <MeProfile w={view} onGo={goTab} onCompose={openCompose} onOpenWorlds={() => setShowRooms(true)}
+            onOpenPost={(id) => { setTab("gossip"); setJump({ type: "post", id, n: now() }); }} />}
           {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
           {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
           {tab === "scene" && <Scenes w={view} update={update} setErr={setErr} jump={jump} onSignal={signalSimulation} openId={sceneId} setOpenId={setSceneId} />}
@@ -60702,6 +61259,11 @@ const signOut = useCallback(async () => {
             onRooms={() => setShowRooms(true)} auto={auto} onAuto={changeAuto}
             detail={detail} onDetail={changeDetail} onLang={changeLang} />}
         </div>
+      </div>
+      <aside className="hush-rail" aria-label={tt("Oldalsáv", "Sidebar")}>
+        <HushRail w={view} onOpenPost={(id) => { setTab("gossip"); setJump({ type: "post", id, n: now() }); }} onGo={goTab} />
+        <div id="hush-rail-scene" />
+      </aside>
       </div>
 
       {showNotes && (
@@ -60752,25 +61314,16 @@ const signOut = useCallback(async () => {
         </div>
       )}
 
-      <div className="nav">
-        <div className="nav-in">
-          {TABS.map(([k, label, Icon]) => (
-            <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
-              <span style={{ position: "relative", display: "inline-flex" }}>
-                <Icon size={19} />
-                {k === "chat" && groundedUnreadDmCount(view) > 0 ? (
-                  <span style={{
-                    position: "absolute", top: -7, right: -9, minWidth: 16, height: 16,
-                    padding: "0 4px", borderRadius: 99, background: "var(--rose)",
-                    color: "var(--ink)", fontSize: 9, fontWeight: 700,
-                    display: "grid", placeItems: "center", lineHeight: 1
-                  }}>{Math.min(99, groundedUnreadDmCount(view))}</span>
-                ) : null}
-              </span> {label}
-            </button>
+      <nav className="hush-tabbar" aria-label={tt("Fő menü", "Main menu")}>
+        <div className="hush-tabs">
+          {MOBILE_TABS.map(([k, label]) => (
+            <button key={k} type="button" className={tab === k ? "on" : ""} onClick={() => goTab(k)}>{label}</button>
           ))}
         </div>
-      </div>
+        <button type="button" className="hush-plus" onClick={openCompose} aria-label={tt("Suttogj valamit", "Whisper something")}>
+          <Plus size={24} />
+        </button>
+      </nav>
     </div>
     </MediaCtx.Provider>
     </LangCtx.Provider>
