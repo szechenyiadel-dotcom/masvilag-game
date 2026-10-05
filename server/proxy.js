@@ -34,7 +34,7 @@ import {
   orderByRefusals,
 } from "./aiPolicy.js";
 import { registerSemanticMemory, createEmbedder } from "./semanticMemory.js";
-import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL } from "./vision.js";
+import { createVisionRunner, DEFAULT_GROQ_VISION_MODEL, DEFAULT_OPENROUTER_VISION_MODELS } from "./vision.js";
 /* MÁSVILÁG SERVER v19 — SPLIT LAZY MEDIA FILE STORAGE — 20260816_0045 */
 /*
  * MÁSVILÁG — server/proxy.js
@@ -3615,6 +3615,13 @@ function visionRunner() {
     pacer: GROQ_PACER,
     allowPaid: AI_ALLOW_PAID_BACKGROUND,
     paid: { openai: visionViaOpenAI, anthropic: visionViaAnthropic },
+    /* R82: free OpenRouter vision on the funded key (1000 free requests a day) */
+    openRouter: {
+      key: process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY || "",
+      models: String(process.env.OPENROUTER_VISION_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean).length
+        ? String(process.env.OPENROUTER_VISION_MODELS).split(",").map((x) => x.trim()).filter(Boolean)
+        : DEFAULT_OPENROUTER_VISION_MODELS,
+    },
   });
   return VISION_RUNNER;
 }
@@ -3632,7 +3639,7 @@ app.post("/ai/vision", async (req, res) => {
     const image = await resolveInputImage(req.body?.image, session.worldCode);
     const prompt = String(
       req.body?.prompt ||
-      "Describe what is visibly happening in this image in 1-3 concise sentences. Mention people, clothing, activity, location and mood only when actually visible. Do not identify real people by name."
+      "Describe what is visibly happening in this image in 2-4 concise sentences. Name the outfit exactly (e.g. bikini, swimsuit, lingerie, shirtless, dress) and how revealing it is, the pose, setting and mood, only when actually visible. Do not identify real people by name."
     ).slice(0, 5000);
 
     if (!image) {

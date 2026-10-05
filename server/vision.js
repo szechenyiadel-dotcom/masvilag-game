@@ -3,7 +3,8 @@
  *
  * Reading an image (album upload, post, chat photo) is background work and uses FREE capacity only:
  *   1. Groq vision model, key 1 then key 2
- *   2. the free Gemini keys (2-8)
+ *   2. OpenRouter :free vision models on the funded key (R82: Qwen 3.8 VL, Gemma 4) — Groq has no vision model now
+ *   3. the free Gemini keys (2-8)
  *   3. nothing else: with no free capacity the answer is "wait" (503 + Retry-After) and the caller
  *      tries again later. OpenAI / Anthropic / the paid Gemini key are used only with
  *      AI_ALLOW_PAID_BACKGROUND=1.
@@ -13,6 +14,8 @@
 import { selectGeminiKeys, groqRetryMs, buildWaitingResult, createGeminiLedger, geminiModelConfig, BACKGROUND_WAIT_MIN_SECONDS } from "./aiPolicy.js";
 
 export const DEFAULT_GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+/* R82: free OpenRouter models that take images (override with OPENROUTER_VISION_MODELS, comma-separated) */
+export const DEFAULT_OPENROUTER_VISION_MODELS = ["qwen/qwen3.8-27b:free", "google/gemma-4-26b-a4b-it:free", "google/gemma-4-31b-it:free", "openrouter/free"];
 export const GROQ_VISION_MAX_BASE64 = 3_900_000;   /* Groq accepts about 4 MB of base64 per image */
 export const VISION_MAX_OUTPUT_TOKENS = 350;
 /* What one picture costs on a Groq key before Groq reports the real figure (image + prompt + answer). */
@@ -43,7 +46,9 @@ const message = (payload, fallback = "") => String(payload?.error?.message || pa
 export function createVisionRunner({
   fetchFn, groqKeys = [], groqModel = DEFAULT_GROQ_VISION_MODEL, geminiFreeKeys = [], geminiPaidKey = "",
   now = Date.now, geminiModels = geminiModelConfig({}).vision, ledger = createGeminiLedger({ now }), allowPaid = false, paid = {}, pacer = null, log = console,
+  openRouter = { key: "", models: [] },
 }) {
+  const openRouterRestUntil = new Map();
   const groqRestUntil = new Map();
   let groqDisabledUntil = 0;
   let discovered = { model: "", at: 0 };
@@ -221,6 +226,44 @@ export function createVisionRunner({
     return null;
   }
 
+  /* R82: OpenRouter's free vision models, one after the other; a busy (429) or missing model rests a while. */
+  async function viaOpenRouter(image, prompt, note) {
+    const key = String(openRouter?.key || "");
+    const models = Array.isArray(openRouter?.models) ? openRouter.models.filter(Boolean) : [];
+    if (!key || !models.length) return null;
+    for (const model of models) {
+      if ((openRouterRestUntil.get(model) || 0) > now()) { note("openrouter", 429, `${model} resting`); continue; }
+      let response, payload;
+      try {
+        response = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+          body: JSON.stringify({
+            model, max_tokens: VISION_MAX_OUTPUT_TOKENS, temperature: 0.2,
+            reasoning: { enabled: false, exclude: true },
+            messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image.dataUrl } }] }],
+          }),
+          timeoutMs: 40000,
+        });
+        payload = await response.json().catch(() => ({}));
+      } catch (error) {
+        note("openrouter", 504, `${model}: ${error?.message || "request failed"}`);
+        continue;
+      }
+      if (response.ok) {
+        const text = String(payload?.choices?.[0]?.message?.content || "").trim();
+        if (text) return { ok: true, text, provider: "openrouter", model: String(payload?.model || model) };
+        note("openrouter", 502, `${model}: empty description`);
+        continue;
+      }
+      const text = message(payload, `HTTP ${response.status}`);
+      note("openrouter", response.status, `${model}: ${text}`);
+      if (response.status === 429) openRouterRestUntil.set(model, now() + 60000);
+      else if ([400, 404, 422].includes(response.status) && MODEL_PROBLEM.test(text)) openRouterRestUntil.set(model, now() + GROQ_MODEL_CACHE_MS);
+    }
+    return null;
+  }
+
   /* Billed providers: only when switched on explicitly. */
   async function viaPaid(image, prompt, note) {
     for (const name of ["openai", "anthropic"]) {
@@ -240,7 +283,7 @@ export function createVisionRunner({
     /* What was tried for THIS image; several images can be read at the same time. */
     const attempts = [];
     const note = (provider, status, text, retryMs = 0) => attempts.push({ provider, status, message: String(text || "").slice(0, 200), retryMs });
-    const result = (await viaGroq(image, prompt, note)) || (await viaGemini(image, prompt, note)) || (allowPaid ? await viaPaid(image, prompt, note) : null);
+    const result = (await viaGroq(image, prompt, note)) || (await viaOpenRouter(image, prompt, note)) || (await viaGemini(image, prompt, note)) || (allowPaid ? await viaPaid(image, prompt, note) : null);
     if (result) return result;
 
     const details = attempts.map((a) => `${a.provider}: ${a.status || "-"} ${a.message}`.trim());

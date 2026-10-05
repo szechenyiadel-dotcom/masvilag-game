@@ -10362,6 +10362,7 @@ function visualPostReactionCard(w, post, cast) {
   return `
 VISUAL POST REACTION ENGINE — THIS IMAGE MATTERS:
 - Treat the image itself as a PRIMARY social trigger, not decorative metadata. React to what is actually visible in the imageDescription.
+- Name what you see: if the description says bikini, swimsuit, lingerie, shirtless, a tight dress, a gym or a beach, the comments react to THAT (the outfit, the body confidence, the place) in each character's own way — never a generic "nice pic".
 - ${adultSafety}
 - Friends and best friends should usually look recognizably supportive on a strong selfie/outfit/photo: specific praise, hype, affectionate teasing, nicknames or familiar shorthand are all natural when that is how they communicate.
 - Enemies/rivals who choose to comment should NOT randomly become fans. They can be dismissive, sarcastic, backhanded, competitive, provocative or intentionally unimpressed. Ignoring/like-refusal is also valid.
@@ -30187,8 +30188,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           const read = await readImagePatiently(() => analyzeImageDataUrl(
             data,
             tt(
-              "Írd le 1-3 rövid mondatban, mi látható ezen a social media képen. Csak látható részleteket említs: személyek száma, tevékenység, ruha, helyszín, hangulat. Ne azonosíts valódi személyt név szerint.",
-              "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+              "Írd le 2-4 rövid, konkrét mondatban, mi látható ezen a social media képen. Az öltözetet PONTOSAN nevezd meg (pl. bikini, fürdőruha, fehérnemű, crop top, miniruha, póló és farmer, félmeztelen, edzőruha) és hogy mennyire kihívó vagy mennyi bőr látszik; a testtartást és a kép típusát (szelfi, tükörszelfi, póz, ölelés); a helyszínt (strand, medence, szoba, klub, edzőterem); a hangulatot (szexi, cuki, laza, elegáns, buli). Hány ember van rajta. Csak azt írd le, ami látszik; ne azonosíts valódi személyt név szerint.",
+              "In 2-4 short, concrete sentences describe what is visibly shown in this social media image. Name the outfit EXACTLY (e.g. bikini, swimsuit, lingerie, crop top, mini dress, T-shirt and jeans, shirtless, gym wear) and how revealing it is / how much skin shows; the pose and kind of shot (selfie, mirror selfie, posing, hug); the setting (beach, pool, bedroom, club, gym); the vibe (sexy, cute, casual, elegant, party). How many people are in it. Only what is visible; do not identify real people by name."
             )
           ));
           imageDescription = read.text;
@@ -58037,7 +58038,7 @@ const signOut = useCallback(async () => {
 
     analyzeImageDataUrl(
       imageInput,
-      "In 1-3 concise sentences describe what is visibly shown in this social media image. Mention only visible details: number of people, activity, clothing, setting and mood. Do not identify real people by name."
+      "In 2-4 short, concrete sentences describe what is visibly shown in this social media image. Name the outfit EXACTLY (e.g. bikini, swimsuit, lingerie, crop top, mini dress, T-shirt and jeans, shirtless, gym wear) and how revealing it is / how much skin shows; the pose and kind of shot (selfie, mirror selfie, posing, hug); the setting (beach, pool, bedroom, club, gym); the vibe (sexy, cute, casual, elegant, party). How many people are in it. Only what is visible; do not identify real people by name."
     )
       .then((vision) => {
         const description = String(vision || "").trim();
@@ -63291,8 +63292,8 @@ function playerPostCommentPrompt(w, post, postContext, cards, minComments, maxCo
       ? "SHORT OR VAGUE POSTS (an exclamation like \"oh fuck me\", \"ugh\", \"finally\"): react to the exclamation itself, as each commenter would — ask what happened, worry, tease, joke, mock — by their relationship. Do NOT explain it with something else from the world (who followed or unfollowed whom, old drama, other posts); nobody knows more than the post says."
       : "RÖVID VAGY HOMÁLYOS POSZT (felkiáltás, pl. \"oh fuck me\", \"ugh\", \"végre\"): magára a felkiáltásra reagáljanak, ahogy az adott kommentelő tenné — mi történt?, aggódás, ugratás, poén, gúny — a kapcsolatuk szerint. NE magyarázd valami mással a világból (ki kit követett be vagy ki, régi dráma, más posztok); senki nem tud többet, mint amit a poszt mond.",
     en
-      ? ("Write " + minComments + "-" + maxComments + " top-level comments by DIFFERENT listed commenters. Every comment must directly make sense as a reaction to this exact post.")
-      : ("Írj " + minComments + "-" + maxComments + " TOP-LEVEL kommentet KÜLÖNBÖZŐ felsorolt kommentelőktől. Mindegyik komment közvetlenül ennek a konkrét posztnak a reakciójaként legyen értelmes."),
+      ? ("Write " + minComments + "-" + maxComments + " top-level comments by DIFFERENT listed commenters. Every comment must directly make sense as a reaction to this exact post." + (postContext.hasImage && postContext.imageDescription ? " The IMAGE DESCRIPTION is what everyone sees: react to the actual outfit / body / place in it (a bikini, lingerie, a gym selfie, a beach), each in their own relationship and personality — no generic 'nice pic'." : ""))
+      : ("Írj " + minComments + "-" + maxComments + " TOP-LEVEL kommentet KÜLÖNBÖZŐ felsorolt kommentelőktől. Mindegyik komment közvetlenül ennek a konkrét posztnak a reakciójaként legyen értelmes." + (postContext.hasImage && postContext.imageDescription ? " A KÉPLEÍRÁS az, amit mindenki lát: a képen lévő konkrét ruhára / testre / helyre reagáljanak (bikini, fehérnemű, edzőtermi szelfi, strand), mindenki a saját kapcsolata és személyisége szerint — ne általános 'jó kép'." : "")),
     en
       ? "Use the relationship/voice differences; do not force everyone into the same negative, positive or sarcastic attitude."
       : "Használd a kapcsolat- és voice-különbségeket; ne kényszeríts mindenkit ugyanabba a negatív, pozitív vagy szarkasztikus hangnembe.",
