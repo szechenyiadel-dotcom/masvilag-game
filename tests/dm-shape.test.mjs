@@ -39,5 +39,7 @@ test("R84: a DM the player asked for ('text me') is not held back by an open sce
 });
 
 test("R85: a failed picture never takes the DM text down with it", () => {
-  assert.match(source, /async function generateAiChatSnap\(character, snapPrompt, addImage, media\) \{\n  try \{\n    return await generateAiChatSnapUnsafe\(/);
+  assert.match(source, /async function generateAiChatSnap\(character, snapPrompt, addImage, media\) \{\n  if \(Date\.now\(\) < CHAT_SNAP_OFF_UNTIL\) return null;\n  try \{\n    return await generateAiChatSnapUnsafe\(/);
+  assert.match(source, /spontaneousImagePrompt && false\n/, "R86: unprompted DMs carry no picture");
+  assert.match(source, /\(explicitImageRequest \|\| playerSentImage\)/, "R86: a picture only when the player sent or asked for one");
 });

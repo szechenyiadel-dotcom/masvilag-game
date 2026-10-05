@@ -17024,11 +17024,16 @@ function albumIntentToGeneratedSnapPrompt(character, item, fallbackPrompt = "") 
 
 /* R85: a failed picture (image provider out of credit, timeout) must not take the DM text down with it —
    "follow me back" DMs with an imagePrompt were lost whole. The DM goes out without the picture. */
+/* R86: when the image provider says it is out of credit / limited, no picture is attempted for an hour */
+let CHAT_SNAP_OFF_UNTIL = 0;
 async function generateAiChatSnap(character, snapPrompt, addImage, media) {
+  if (Date.now() < CHAT_SNAP_OFF_UNTIL) return null;
   try {
     return await generateAiChatSnapUnsafe(character, snapPrompt, addImage, media);
   } catch (error) {
-    console.warn("[chat-snap] picture skipped, the message goes out without it:", error && error.message ? error.message : error);
+    const msg = String(error && error.message ? error.message : error || "");
+    if (/credit|quota|billing|insufficient|balance|budget|limit|402|429/i.test(msg)) CHAT_SNAP_OFF_UNTIL = Date.now() + 60 * 60 * 1000;
+    console.warn("[chat-snap] picture skipped, the message goes out without it:", msg);
     return null;
   }
 }
@@ -37780,12 +37785,11 @@ Formátum:
         ? forcedChatSnapPrompt(t, c)
         : "");
 
+    /* R86 (owner's rule): a picture comes back only when the player sent one or asked for one */
+    const playerSentImage = Boolean(outgoingMessage && (outgoingMessage.imageId || outgoingMessage.image));
     const generatedAiSnap =
       generatedRequestPrompt &&
-      (
-        !requestedReplyText ||
-        explicitImageRequest
-      )
+      (explicitImageRequest || playerSentImage)
         ? await generateAiChatSnap(
             c,
             generatedRequestPrompt,
@@ -56686,8 +56690,9 @@ if (targetNote) {
         ? albumIntentToGeneratedSnapPrompt(bot, legacyAlbumIntent, txt)
         : "");
 
+    /* R86 (owner's rule): an unprompted DM never carries a picture — pictures only when the player sends one or asks */
     const generatedAiSnap =
-      spontaneousImagePrompt
+      spontaneousImagePrompt && false
         ? await generateAiChatSnap(
             bot,
             spontaneousImagePrompt,
