@@ -360,7 +360,7 @@ test("App: the world's own actions recall for the acting AI characters only", ()
 });
 
 test("App: every autonomous writing call that names its characters recalls their memory", () => {
-  const sites = appSource.match(/askWorldWritingJSON\("(?:feed-post|comments|dm|scene|group-chat|notes)"/g) || [];
+  const sites = appSource.match(/askWorldWritingJSON\("(?:feed-post|comments|dm|scene|group-chat|notes|popup|invite)"/g) || [];
   const wired = appSource.match(/backgroundMemory\(/g) || [];
   assert.ok(sites.length >= 20);
   assert.ok(wired.length >= sites.length - 3, `wired ${wired.length} of ${sites.length}`);

@@ -21,7 +21,7 @@ test("Popups ask for their own 'popup' source, not the paid Scene chain", () => 
   }
   assert.match(pick(["genPopupEventReroll"]), /foreground:true/);
   assert.match(pick(["genPopupCustomOutcome"]), /foreground:true/);
-  assert.match(proxy, /source === "popup"\) \{[\s\S]{0,200}raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"\]/);
+  assert.match(proxy, /source === "popup" \|\| source === "invite"\) \{[\s\S]{0,260}raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"\]/);
   assert.match(proxy, /allowPaidBackground: AI_ALLOW_PAID_BACKGROUND \|\| \(source === "dm" && playerWaiting\) \|\| source === "scene" \|\| isComment \}/, "background popups never get paid capacity");
 });
 
@@ -68,4 +68,20 @@ test("Unprompted DMs: 'text me', no follow-back and unfollow always come; any ot
   assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete state\.pendingDmTriggers\[row\.key\];continue;\}/);
   assert.match(source, /if \(!dmTriggerAlwaysAllowed\(action\.payload && action\.payload\.trigger\)\) \{\n      sim\.otherDmTimes/);
   assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,220}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2"\]/);
+});
+
+test("A spontaneous Event invitation comes at most once a day and is written on free capacity", () => {
+  const context = vm.createContext({ Math, Number, String, Date, now: () => new Date(2026, 9, 5, 12).getTime() });
+  vm.runInContext(pick(["popupLocalDayKey", "AI_SPONTANEOUS_INVITE_DAILY_MAX", "aiSpontaneousInviteDailyCapReached"]), context);
+  const t = new Date(2026, 9, 5, 12).getTime();
+  assert.equal(context.aiSpontaneousInviteDailyCapReached({ sim: {} }, t), false);
+  assert.equal(context.aiSpontaneousInviteDailyCapReached({ sim: { spontaneousInviteDay: "2026-10-05", spontaneousInviteCount: 1 } }, t), true);
+  assert.equal(context.aiSpontaneousInviteDailyCapReached({ sim: { spontaneousInviteDay: "2026-10-04", spontaneousInviteCount: 3 } }, t), false, "a new day");
+  assert.match(pick(["canAiInitiateRoleplay"]), /if \(aiSpontaneousInviteDailyCapReached\(w\)\) return false;/);
+  assert.match(source, /sim\.spontaneousInviteCount = sim\.spontaneousInviteDay === today \?/);
+  for (const fn of ["genRoleplayInitiation", "genForcedEverydayRoleplayInvitation"]) {
+    assert.match(pick([fn]), /askWorldWritingJSON\("invite"/, fn);
+    assert.doesNotMatch(pick([fn]), /askWorldWritingJSON\("scene"/, fn);
+  }
+  assert.match(proxy, /source === "popup" \|\| source === "invite"\) \{/);
 });

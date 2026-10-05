@@ -41529,7 +41529,13 @@ function markSimulationCadence(w, action) {
     }
   }
   if (action && action.type === "popup-event") { sim.lastPopupSuccessAt = ts; sim.popupFailedAttempts = 0; }
-  if (action && action.type === "roleplay-initiate") sim.lastRoleplayInviteAt = ts;
+  if (action && action.type === "roleplay-initiate") {
+    sim.lastRoleplayInviteAt = ts;
+    /* R72: count today's spontaneous invitations */
+    const today = popupLocalDayKey(ts);
+    sim.spontaneousInviteCount = sim.spontaneousInviteDay === today ? (Number(sim.spontaneousInviteCount) || 0) + 1 : 1;
+    sim.spontaneousInviteDay = today;
+  }
   if (action && action.type === "note-react") sim.lastNoteReactionAt = ts;
 
   if (
@@ -51613,8 +51619,19 @@ function lastAiInitiatedRoleplayAt(w) {
   );
 }
 
+/* R72 (owner's rule): Event/Scene invitations happen mainly inside DM conversations (a meetup agreed in DMs, a DM
+   reply that turns into a scene). An invitation out of the blue, from this autonomous lane, comes at most ONCE a day. */
+const AI_SPONTANEOUS_INVITE_DAILY_MAX = 1;
+function aiSpontaneousInviteDailyCapReached(w, at = now()) {
+  const sim = w && w.sim;
+  if (!sim) return false;
+  const today = popupLocalDayKey(at);
+  return Boolean(today) && sim.spontaneousInviteDay === today && (Number(sim.spontaneousInviteCount) || 0) >= AI_SPONTANEOUS_INVITE_DAILY_MAX;
+}
+
 function canAiInitiateRoleplay(w) {
   if (!w || !(w.chars || []).length) return false;
+  if (aiSpontaneousInviteDailyCapReached(w)) return false;
   const ts = now();
   /* One unanswered invitation at a time. Do not stack new RP calls while the
      player still has a live Accept/Decline choice. */
@@ -52016,7 +52033,7 @@ async function genRoleplayInitiation(w, bot) {
     .map((m) => `${m && m.from === "them" ? bot.name : w.player.name}: ${m && m.text || ""}`)
     .join("\n");
 
-  return askWorldWritingJSON("scene", 
+  return askWorldWritingJSON("invite", /* R72: free capacity, not the paid Scene chain */ 
     w,
     engineFor(w),
     `${worldContext(w, [bot.id], false, bot.id)}
@@ -52091,7 +52108,7 @@ JSON:
 
 async function genForcedEverydayRoleplayInvitation(w, bot) {
   if (!w || !bot) return null;
-  return askWorldWritingJSON("scene", 
+  return askWorldWritingJSON("invite", 
     w,
     engineFor(w),
     `${worldContext(w,[bot.id],false,bot.id)}
