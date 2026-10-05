@@ -5155,7 +5155,10 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
          generate a DM ...") and ran out of time: ask OpenRouter for a short, hidden reasoning pass. */
       body: JSON.stringify(provider === "openrouter3"
         ? { ...buildCompatibleChatPayload(providerBody, model), reasoning: { effort: "low", exclude: true } }
-        : buildCompatibleChatPayload(providerBody, model)),
+        : provider === "openrouter-dm-dolphin"
+          /* R74: Gemma 4 answers much faster with thinking off */
+          ? { ...buildCompatibleChatPayload(providerBody, model), reasoning: { enabled: false, exclude: true } }
+          : buildCompatibleChatPayload(providerBody, model)),
       signal: ctrl.signal,
     });
     const raw = await r.text();
@@ -5218,7 +5221,8 @@ function providerModel(provider, body = {}) {
     return GROQ_MODEL_2 || GROQ_MODEL || "";
   }
   if (provider === "openrouter-dm-dolphin") {
-    return "cognitivecomputations/dolphin3.0-mistral-24b:free";
+    /* R74: Dolphin 3.0's free endpoint is gone ("No endpoints found"); this slot now runs Gemma 4 31B (free). */
+    return String(process.env.OPENROUTER_GEMMA_MODEL || "google/gemma-4-31b-it:free").trim();
   }
   if (provider === "openrouter-dm-venice") {
     return "cognitivecomputations/dolphin-mistral-24b-venice-edition";
@@ -5268,7 +5272,8 @@ async function callMessageProvider(provider, body) {
   if (provider === "mistral2") return proxyCompatibleMessage("mistral2", MISTRAL_API_KEY_2, providerModel("mistral2", body) || MISTRAL_MODEL, "https://api.mistral.ai/v1/chat/completions", body);
   if (provider === "groq") return proxyCompatibleMessage("groq", GROQ_API_KEY, providerModel("groq", body), "https://api.groq.com/openai/v1/chat/completions", body);
   if (provider === "groq2") return proxyCompatibleMessage("groq2", GROQ_API_KEY_2, providerModel("groq2", body), "https://api.groq.com/openai/v1/chat/completions", body);
-  if (provider === "openrouter-dm-dolphin") return proxyCompatibleMessage("openrouter-dm-dolphin", process.env.OPENROUTER_API_KEY, providerModel("openrouter-dm-dolphin", body), "https://openrouter.ai/api/v1/chat/completions", body);
+  /* R74: on the funded account's key (1,000 free requests a day there instead of 50), key 1 if there is no key 2 */
+  if (provider === "openrouter-dm-dolphin") return proxyCompatibleMessage("openrouter-dm-dolphin", process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY, providerModel("openrouter-dm-dolphin", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter-dm-venice") return proxyCompatibleMessage("openrouter-dm-venice", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter-dm-venice", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openai") {
     const result = await proxyOpenAIMessage(body);
@@ -5287,7 +5292,7 @@ function configuredAIProvider(provider) {
   if (provider === "mistral2") return Boolean(MISTRAL_API_KEY_2 && MISTRAL_MODEL);
   if (provider === "groq") return Boolean(GROQ_API_KEY && GROQ_MODEL);
   if (provider === "groq2") return Boolean(GROQ_API_KEY_2 && (GROQ_MODEL_2 || GROQ_MODEL));
-  if (provider === "openrouter-dm-dolphin") return Boolean(process.env.OPENROUTER_API_KEY);
+  if (provider === "openrouter-dm-dolphin") return Boolean(process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter-dm-venice") return Boolean(process.env.OPENROUTER_API_KEY_2);
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
   if (provider === "openrouter3") return Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL_3);
