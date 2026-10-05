@@ -17022,7 +17022,18 @@ function albumIntentToGeneratedSnapPrompt(character, item, fallbackPrompt = "") 
   return `Generate a NEW private-chat smartphone selfie/snap of ${(character && character.name) || "the character"}. Use the album item only as visual identity/reference inspiration, never resend or recreate the exact stored photo. ${visible ? `Reference image context: ${visible}.` : ""} ${String(fallbackPrompt || "").trim()}`.trim();
 }
 
-async function generateAiChatSnap(
+/* R85: a failed picture (image provider out of credit, timeout) must not take the DM text down with it —
+   "follow me back" DMs with an imagePrompt were lost whole. The DM goes out without the picture. */
+async function generateAiChatSnap(character, snapPrompt, addImage, media) {
+  try {
+    return await generateAiChatSnapUnsafe(character, snapPrompt, addImage, media);
+  } catch (error) {
+    console.warn("[chat-snap] picture skipped, the message goes out without it:", error && error.message ? error.message : error);
+    return null;
+  }
+}
+
+async function generateAiChatSnapUnsafe(
   character,
   snapPrompt,
   addImage,

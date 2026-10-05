@@ -2,7 +2,7 @@
  * MÁSVILÁG IMAGE UNDERSTANDING
  *
  * Reading an image (album upload, post, chat photo) is background work and uses FREE capacity only:
- *   1. Groq vision model, key 1 then key 2
+ *   1. Groq vision model, key 1 then key 2 (switched off in the app since R85: useGroq false)
  *   2. OpenRouter :free vision models on the funded key (R82: Qwen 3.8 VL, Gemma 4) — Groq has no vision model now
  *   3. the free Gemini keys (2-8)
  *   3. nothing else: with no free capacity the answer is "wait" (503 + Retry-After) and the caller
@@ -46,7 +46,7 @@ const message = (payload, fallback = "") => String(payload?.error?.message || pa
 export function createVisionRunner({
   fetchFn, groqKeys = [], groqModel = DEFAULT_GROQ_VISION_MODEL, geminiFreeKeys = [], geminiPaidKey = "",
   now = Date.now, geminiModels = geminiModelConfig({}).vision, ledger = createGeminiLedger({ now }), allowPaid = false, paid = {}, pacer = null, log = console,
-  openRouter = { key: "", models: [] },
+  openRouter = { key: "", models: [] }, useGroq = true,
 }) {
   const openRouterRestUntil = new Map();
   const groqRestUntil = new Map();
@@ -283,7 +283,8 @@ export function createVisionRunner({
     /* What was tried for THIS image; several images can be read at the same time. */
     const attempts = [];
     const note = (provider, status, text, retryMs = 0) => attempts.push({ provider, status, message: String(text || "").slice(0, 200), retryMs });
-    const result = (await viaGroq(image, prompt, note)) || (await viaOpenRouter(image, prompt, note)) || (await viaGemini(image, prompt, note)) || (allowPaid ? await viaPaid(image, prompt, note) : null);
+    /* R85 (owner's rule): Groq is out of image reading — OpenRouter's free vision models, then free Gemini */
+    const result = (useGroq ? await viaGroq(image, prompt, note) : null) || (await viaOpenRouter(image, prompt, note)) || (await viaGemini(image, prompt, note)) || (allowPaid ? await viaPaid(image, prompt, note) : null);
     if (result) return result;
 
     const details = attempts.map((a) => `${a.provider}: ${a.status || "-"} ${a.message}`.trim());

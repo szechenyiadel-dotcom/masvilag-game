@@ -285,3 +285,12 @@ test("R82: the post-image prompt names the outfit exactly (bikini, lingerie, shi
   const proxy = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
   assert.match(proxy, /openRouter: \{\n\s+key: process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
 });
+
+test("R85: with useGroq off, Groq is never asked for a picture", async () => {
+  const t = setup((c) => (c.host === "openrouter.ai" ? groqOk("A man in gym wear.") : geminiOk()), { useGroq: false, openRouter: { key: "or2", models: ["qwen/qwen3.8-27b:free"] } });
+  const result = await t.runner.analyze({ image: image(), prompt: "p" });
+  assert.equal(result.provider, "openrouter");
+  assert.ok(!t.calls.some((c) => c.host === "api.groq.com"));
+  const proxy = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
+  assert.match(proxy, /useGroq: false,/);
+});

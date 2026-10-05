@@ -21,7 +21,7 @@ test("Popups ask for their own 'popup' source, not the paid Scene chain", () => 
   }
   assert.match(pick(["genPopupEventReroll"]), /foreground:true/);
   assert.match(pick(["genPopupCustomOutcome"]), /foreground:true/);
-  assert.match(proxy, /source === "popup" \|\| source === "invite"\) \{[\s\S]{0,260}raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"\]/);
+  assert.match(proxy, /source === "popup" \|\| source === "invite"\) \{[\s\S]{0,260}raw = \["gemini", "groq", "groq2", "openrouter3"\]/, "R85: popups never paid");
   assert.match(proxy, /allowPaidBackground: AI_ALLOW_PAID_BACKGROUND \|\| source === "dm" \|\| source === "scene" \|\| isComment \}/, "background popups never get paid capacity");
 });
 

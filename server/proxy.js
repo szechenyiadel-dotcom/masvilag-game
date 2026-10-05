@@ -3615,6 +3615,8 @@ function visionRunner() {
     pacer: GROQ_PACER,
     allowPaid: AI_ALLOW_PAID_BACKGROUND,
     paid: { openai: visionViaOpenAI, anthropic: visionViaAnthropic },
+    /* R85: no Groq in image reading (owner's choice) */
+    useGroq: false,
     /* R82: free OpenRouter vision on the funded key (1000 free requests a day) */
     openRouter: {
       key: process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY || "",
@@ -5702,7 +5704,8 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
        waiting on it (reroll / own answer). */
-    raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-venice"];
+    /* R85 (owner's rule): popups never use a paid provider, not even when the player is waiting */
+    raw = ["gemini", "groq", "groq2", "openrouter3"];
   } else if (source === "scene") {
     /* Scenes: Dolphin (OpenRouter key 1) -> Venice (OpenRouter key 2, paid) -> Mistral 1 -> Mistral 2. */
     raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
