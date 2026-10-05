@@ -49,7 +49,7 @@ function freeCompatCandidates(env) {
   const groqOutput = Number(env.GROQ_ANALYSIS_OUTPUT_LIMIT) > 0 ? Number(env.GROQ_ANALYSIS_OUTPUT_LIMIT) : 8192;
   if (env.GROQ_API_KEY) out.push({ name: "groq", model: groqModel, key: env.GROQ_API_KEY, keySlot: "GROQ_API_KEY", url: COMPAT_ANALYSIS_URLS.groq, maxOutput: groqOutput });
   if (env.GROQ_API_KEY_2 && env.GROQ_API_KEY_2 !== env.GROQ_API_KEY) out.push({ name: "groq", model: groqModel, key: env.GROQ_API_KEY_2, keySlot: "GROQ_API_KEY_2", url: COMPAT_ANALYSIS_URLS.groq, maxOutput: groqOutput });
-  if (env.OPENROUTER_API_KEY) out.push({ name: "openrouter", model: String(env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-ultra-550b-a55b:free").trim(), key: env.OPENROUTER_API_KEY, keySlot: "OPENROUTER_API_KEY", url: COMPAT_ANALYSIS_URLS.openrouter, maxOutput: 32000 });
+  if (env.OPENROUTER_API_KEY) out.push({ name: "openrouter", model: String(env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-super-120b-a12b:free").trim(), key: env.OPENROUTER_API_KEY, keySlot: "OPENROUTER_API_KEY", url: COMPAT_ANALYSIS_URLS.openrouter, maxOutput: 32000 });
   return out;
 }
 

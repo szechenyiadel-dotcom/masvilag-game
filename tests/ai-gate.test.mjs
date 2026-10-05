@@ -33,7 +33,7 @@ const NAMES = [
 function gate(env, scripted) {
   const calls = [];
   const context = vm.createContext({
-    process: { env: { OPENROUTER_API_KEY: "or", OPENROUTER_API_KEY_2: "or2", OPENROUTER_MODEL_3: "nvidia/nemotron-3-ultra-550b-a55b:free", ...env } },
+    process: { env: { OPENROUTER_API_KEY: "or", OPENROUTER_API_KEY_2: "or2", OPENROUTER_MODEL_3: "nvidia/nemotron-3-super-120b-a12b:free", ...env } },
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
@@ -650,7 +650,7 @@ test("PAID_MAX_INPUT_CHARS moves the ceiling, and 0 switches it off", async () =
 
 test("The DM ceiling does not truncate Nemotron's 1M-context Gemini fallback", async () => {
   const other = groqPath({ env: {} });
-  await other.context.proxyCompatibleMessage("openrouter3", "key", "nvidia/nemotron-3-ultra-550b-a55b:free", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
+  await other.context.proxyCompatibleMessage("openrouter3", "key", "nvidia/nemotron-3-super-120b-a12b:free", "https://openrouter.ai/x", { ...bigBody(), system: "S".repeat(40000) });
   assert.equal(sentChars(other.sent[0]), 40000 + bigBody().messages[0].content.length, "Nemotron keeps the full prompt");
 });
 
