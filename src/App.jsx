@@ -41522,7 +41522,7 @@ function markSimulationCadence(w, action) {
   /* v53: each autonomous lane owns a SUCCESS clock. Reactive DM traffic,
      feed posts or failed attempts can no longer reset another lane's hunger. */
   if (action && action.type === "dm") sim.lastAutonomousDmAt = ts;
-  if (action && action.type === "popup-event") sim.lastPopupSuccessAt = ts;
+  if (action && action.type === "popup-event") { sim.lastPopupSuccessAt = ts; sim.popupFailedAttempts = 0; }
   if (action && action.type === "roleplay-initiate") sim.lastRoleplayInviteAt = ts;
   if (action && action.type === "note-react") sim.lastNoteReactionAt = ts;
 
@@ -45145,7 +45145,8 @@ function currentPopupEvent(w) {
   );
 }
 
-const POPUP_DAILY_HARD_MAX = 8;
+/* R69: popups are the most expensive ambient lane (whole world context per call); fewer per day */
+const POPUP_DAILY_HARD_MAX = 6;
 
 function popupLocalDayKey(ts = now()) {
   const d = new Date(Number(ts) || now());
@@ -45191,17 +45192,18 @@ function popupCadenceMs(w) {
    * Popups stay occasional, but the old 8-24 minute floor plus a hard
    * three-per-day cap could make a healthy world look completely silent.
    */
+  /* R69: roughly half as often as before — popups cost a whole world context per call */
   const base =
     level === "low"
-      ? 12 * 60 * 1000
+      ? 20 * 60 * 1000
       : level === "high"
-        ? 6 * 60 * 1000
+        ? 10 * 60 * 1000
         : level === "chaotic"
-          ? 5 * 60 * 1000
-          : 8 * 60 * 1000;
+          ? 8 * 60 * 1000
+          : 15 * 60 * 1000;
 
   return Math.max(
-    5 * 60 * 1000,
+    8 * 60 * 1000,
     Math.round(
       base *
       LIVE_WORLD_POPUP_CADENCE_MULTIPLIER
@@ -45326,12 +45328,19 @@ function popupOverdueByMs(w) {
   return now() - lastAt - popupCadenceMs(w);
 }
 
+/* R69: after a failed popup generation the next try waits 25 s, then 50 s, 100 s, ... up to 15 minutes,
+   instead of re-sending a whole world context every 25 seconds while the AI is out of capacity. */
+function popupRetryWaitMs(w) {
+  const failures = Math.max(0, Math.round(Number(w && w.sim && w.sim.popupFailedAttempts) || 0));
+  if (!failures) return LIVE_WORLD_POPUP_RETRY_MS;
+  return Math.min(15 * 60 * 1000, LIVE_WORLD_POPUP_RETRY_MS * Math.pow(2, Math.min(6, failures - 1)));
+}
+
 function popupEventOverdue(w) {
   if (!w || popupGenerationBlocked(w)) return false;
   const lastAttemptAt = Number(w.sim && w.sim.popupAttemptAt) || 0;
-  /* Failed/empty generations retry quickly; a failed model answer must not mute
-     the entire popup lane for another minute and a half. */
-  if (lastAttemptAt && now() - lastAttemptAt < LIVE_WORLD_POPUP_RETRY_MS) return false;
+  /* Failed/empty generations retry after a growing pause (R69). */
+  if (lastAttemptAt && now() - lastAttemptAt < popupRetryWaitMs(w)) return false;
   return popupOverdueByMs(w) >= 0;
 }
 
@@ -45544,7 +45553,8 @@ async function genPopupEvent(w,seed){
     ? `EZ MOST VALÓDI RANDOM / AMBIENT LIVE-WORLD EVENT. Hozz létre egy FRISS, váratlan, de a meglévő kánonból, életkorból, élethelyzetből, rutinból és kapcsolatokból természetesen következő helyzetet. Lehet például: valaki odalép a játékoshoz egy HOZZÁJUK ILLŐ helyen; váratlanul elhívja valahova; meghívás érkezik buliba/randira/eseményre; egy rivális konfrontál; valaki segítséget kér; kínos helyzet alakul ki mások előtt; társas kihívás, lehetőség, félreértés vagy spontán találkozás történik. CSAK létező karaktereket használj. Ne találj ki múltbeli tényt vagy oda nem illő intézményt csak azért, hogy dráma legyen.`
     : `Ez a popup a fenti, MÁR MEGTÖRTÉNT social helyzet következménye. Ne találj ki új alap-eseményt vagy új személyt; a következmény a valódi eseményből nőjön ki.`;
 
-  return askWorldWritingJSON("scene", w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
+  /* R69: popups have their own source — free providers, not the paid Scene chain */
+  return askWorldWritingJSON("popup", w,engineFor(w),`${worldContext(w,involved.filter((id)=>!isHuman(w,id)),false,null)}
 
 A JÁTÉKOS KARAKTERE EGY VÁRATLAN HELYZET KÖZEPÉBE KERÜL.
 TRIGGER: ${seed.type}\n${seed.text}
@@ -45735,7 +45745,7 @@ async function genPopupEventReroll(w,event){
   ].slice(-5).join("\n---\n");
   const cast=(w.chars||[]).filter((c)=>c&&!isHuman(w,c.id)).slice(0,10).map((c)=>c.id);
 
-  return askWorldWritingJSON("scene", w,engineFor(w),`${worldContext(w,cast,false,null)}
+  return askWorldWritingJSON("popup", w,engineFor(w),`${worldContext(w,cast,false,null)}
 
 A játékos a 🎲 kockával ÚJ VÁLTOZATOT kér ugyanahhoz a jelenlegi világpillanathoz.
 Az előző variánsok, amiket NEM szabad lényegében megismételni:
@@ -45762,7 +45772,7 @@ Ugyanazokat a szabályokat tartsd, mint egy normál popupnál:
 - a játékos helyett soha ne dönts/cselekedj.
 
 JSON:
-{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:1100,priority:22});
+{"skip":false,"icon":"🎲","title":"","text":"","location":"","visibility":"limited","witnessIds":[],"gossipPotential":40,"eventKind":"encounter","choices":[{"id":"c1","label":"","description":"","tone":"clarify","targetId":"","reactions":[],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0}}]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:1100,priority:22,foreground:true /* the player clicked reroll */});
 }
 
 function applyPopupReroll(w,eventId,raw){
@@ -45797,7 +45807,7 @@ async function genPopupCustomOutcome(w,event,customText){
   if(!event||!text)return{skip:true};
   const cast=[...(event.involvedIds||[]),...(event.witnessIds||[])].filter((id,index,arr)=>id&&!isHuman(w,id)&&arr.indexOf(id)===index).slice(0,8);
 
-  return askWorldWritingJSON("scene", w,engineFor(w),`${worldContext(w,cast,false,null)}
+  return askWorldWritingJSON("popup", w,engineFor(w),`${worldContext(w,cast,false,null)}
 
 POPUP HELYZET:
 ${event.title}\n${event.text}
@@ -45821,7 +45831,7 @@ NE írd át a játékos cselekvését más cselekvéssé. A feladatod kizáróla
 - gossipTags: legfeljebb 5 rövid tag, pl. confrontation, awkward, romance, fight, public-drama, scandal, receipts, cringe, backlash.
 
 JSON:
-{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:800,priority:65});
+{"skip":false,"summary":"","tone":"clarify","visibility":"limited","witnessIds":[],"gossipPotential":35,"reactions":[{"id":"AI id","delta":0,"mood":"","why":""}],"socialImpact":{"aura":0,"reputation":0,"hype":0,"humor":0,"followerRate":0},"publicSentiment":{"support":0,"dislike":0,"controversy":0,"cancel":0},"drama":20,"romance":0,"embarrassment":0,"gossipTags":[]}${TAIL}`,{ memory: backgroundMemory(w, cast),maxTokens:800,priority:65,foreground:true /* the player wrote their own answer */});
 }
 
 function normalizePopupCustomOutcome(w,event,customText,raw){
@@ -60162,7 +60172,10 @@ const signOut = useCallback(async () => {
           ensureSimState(n).groupAttemptAt = now();
         }
         if (action && action.type === "popup-event") {
-          ensureSimState(n).popupAttemptAt = now();
+          const popupSim = ensureSimState(n);
+          popupSim.popupAttemptAt = now();
+          /* R69: counted as failed until it succeeds (markSimulationCadence resets it) */
+          popupSim.popupFailedAttempts = Math.max(0, Math.round(Number(popupSim.popupFailedAttempts) || 0)) + 1;
         }
       });
       let ok = false;
