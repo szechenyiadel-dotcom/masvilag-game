@@ -50079,7 +50079,13 @@ function romanticStakeForObserver(w, observerId, subjectId) {
 
   /* R77: plain "relationship" / "together" / "partner" are not romance — a friend summary ("their relationship is
      amicable", "they train together", "sparring partner") made a straight friend "possessive and angry". */
-  if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|dating|lover|járnak|párja|pasija|csaja|szerelme|jegyes|házastárs)\b|\b(?:romantic|life|domestic)\s+partner\b|\b(?:in\s+a|romantic|sexual|secret)\s+relationship\b|\b(?:are|got|been|back|living)\s+together\b/i.test(corpus)) {
+  /* R92: fake dating is not a real partner stake — only real hidden feelings make it a (crush-level) stake */
+  if (isFakeDatingText(corpus)) {
+    let realFeelings = false;
+    try { realFeelings = relationshipCrushActive(w, observerId, subjectId, rel) || /crush|in love|feelings|attract|szerelm|vonz|érez/i.test(String(rel.hidden || "")); } catch (error) { realFeelings = false; }
+    if (!realFeelings) return null;
+    stake = 2; label = "fake-dating";
+  } else if (/\b(?:wife|husband|spouse|girlfriend|boyfriend|fianc[eé]e?|dating|lover|járnak|párja|pasija|csaja|szerelme|jegyes|házastárs)\b|\b(?:romantic|life|domestic)\s+partner\b|\b(?:in\s+a|romantic|sexual|secret)\s+relationship\b|\b(?:are|got|been|back|living)\s+together\b/i.test(corpus)) {
     stake = 4; label = "partner";
   } else if (/\b(?:situationship|hooking\s*up|hookup|friends?\s+with\s+benefits|fwb|secret\s+affair|affair|titkos\s+viszony|kavar|kavarnak|összejár)\b/i.test(corpus)) {
     stake = 3; label = "involved";
@@ -50188,10 +50194,26 @@ function scheduleRomanticObserverReaction(w, event, observerId, subjectId, row =
      Route the consequence to the ACTUAL relationship target. AI→AI jealousy must
      never be silently converted into a DM to the player. */
   if (subjectId === w.meId) {
+    /* R92: say exactly what they saw — without it the model invented "who were you talking about / why is he still
+       texting you" — and how a player / fuckboy type shows it (cool, cocky, never "you're mine") */
+    let causeText = "";
+    try {
+      const en = worldLanguage(w, w.meId) === "en";
+      const player = nameOfIn(w, w.meId);
+      const others = (event.targetIds || []).filter((id) => id && id !== w.meId && id !== observerId).map((id) => nameOfIn(w, id));
+      const where = event.type === "comment" || event.type === "reply" ? (en ? "in a public comment" : "egy nyilvános kommentben") : event.type === "post" ? (en ? "in a public post" : "egy nyilvános posztban") : (en ? "publicly" : "nyilvánosan");
+      const said = cut(String(event.text || "").replace(/\s+/g, " "), 200);
+      const observer = charById(w, observerId) || {};
+      const guarded = /fuck ?boy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|womani[sz]er|heartbreaker|commitment|emotionally unavailable|no strings|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz/i.test([observer.personality, observer.traits, observer.extra].filter(Boolean).join(" "));
+      causeText = (en
+        ? "You saw " + player + " " + where + (others.length ? " with " + others.join(", ") : "") + (said ? ": \"" + said + "\"" : "") + ". That is ALL that happened — react to exactly this, name it, invent nothing else (no other conversations, no one else texting them)."
+        : "Láttad, hogy " + player + " " + where + (others.length ? " (" + others.join(", ") + ")" : "") + (said ? ": „" + said + "”" : "") + ". CSAK ennyi történt — erre reagálj konkrétan, mást ne találj ki (más beszélgetést, hogy más is ír neki).") +
+        (guarded ? (en ? " You are the player / fuckboy type: you do not do possessive 'you're mine' lines or jealous interrogations — you play it cool, a cocky jab, a flirty provocation, pretending it does not bother you." : " Te a csajozós / fuckboy típus vagy: nincs birtokló „az enyém vagy” és féltékeny kérdőre vonás — lazán játszod, egy pimasz beszólás, flörtös provokáció, úgy teszel, mintha nem zavarna.") : "");
+    } catch (error) { causeText = ""; }
     simEnqueue(w, mkAction(
       "dm",
       keyBase + ":dm",
-      { botId: observerId, trigger: "romantic-jealousy", eventId: event.id || "" },
+      { botId: observerId, trigger: "romantic-jealousy", eventId: event.id || "", causeText },
       "event"
     ));
     return;
@@ -62723,6 +62745,17 @@ const EXTREME_NATURES = [
   { key: "violent", re: /violent|er[oő]szakos|unhinged|explosive temper|killer|gyilkos/i,
     order: "dangerous: volatile, a short fuse, threats that feel real, an edge that makes people careful around them" },
 ];
+/* R92: a player / fuckboy / commitment-shy character stays that — cool, cocky, flirty, never clingy or possessive */
+function playerTypeDirective(w, c) {
+  if (!w || !c || isHuman(w, c.id)) return "";
+  const nature = [c.personality, c.traits, c.extra, c.speech].filter(Boolean).join(" ");
+  if (!/fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|womani[sz]er|heartbreaker|commitment[- ]?(?:phob|shy|issues)|emotionally unavailable|no strings|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz/i.test(nature)) return "";
+  const name = String(c.name || "").toUpperCase();
+  return "PLAYER TYPE — " + name + " (FROM THEIR OWN SHEET): cocky, charming, flirts easily and with more than one person, keeps everything light and casual. " +
+    "Never clingy, never possessive: no \"you're mine\", no \"I can't stand sharing\", no jealous interrogations about who they talk to — if something bothers " + name + ", it shows as a cocky jab or a provocation while acting unbothered. " +
+    "Real feelings stay hidden behind jokes and flirting; talk of commitment or feelings makes " + name + " deflect or back off.";
+}
+
 function extremeNatureText(w, c) {
   if (!c) return "";
   let bible = null;
@@ -62819,7 +62852,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       const owner = "PRIVATE CARD OF " + String(c.name || "").toUpperCase() + " — ONLY " + String(c.name || "").toUpperCase() + " KNOWS THESE FACTS. Places, events, secrets and people from this card come only from their mouth, or from someone whose OWN card has the same thing.";
       /* R75 */
       let extreme = "";
-      try { extreme = extremeNatureDirective(w, c); } catch (error) { extreme = ""; }
+      try { extreme = [extremeNatureDirective(w, c), playerTypeDirective(w, c)].filter(Boolean).join("\n"); } catch (error) { extreme = ""; }
       return [owner, extreme, style, personaBlock, bible].filter(Boolean).join("\n");
     })
     .filter(Boolean);
@@ -65082,7 +65115,7 @@ function fakeDatingBehaviorCard(w, actorId, targetId) {
   /* a player / fuckboy / commitment-shy type admits real feelings much harder */
   const actor = charById(w, actorId) || {};
   const nature = [actor.personality, actor.traits, actor.extra, actor.speech].filter(Boolean).join(" ");
-  const guarded = /fuck ?boy|f\*ckboy|playboy|player\b|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
+  const guarded = /fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
   return en
     ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. Never reveal publicly that it is fake." +
       " In private (DMs, scenes with only the two of you) the real feelings" + (real ? " (" + real + ")" : "") + " only LEAK — a look held too long, jealousy you deny, staying longer than the deal needs, a softer moment you immediately joke away. Liking them or wanting them is fine to show; ADMITTING that you feel more, that it is not fake for you any more, does not happen in an ordinary DM: you deflect ('it's part of the act', 'don't flatter yourself', a joke, a flirt, a change of subject) and get colder if pressed. If they say you are good at faking it, you take the bait as a compliment or a challenge ('I'm good at everything') — you do NOT answer 'I'm not faking', 'I mean every word' or anything that says the feelings are real." +

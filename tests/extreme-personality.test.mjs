@@ -56,7 +56,7 @@ test("Hungarian sheets and the character bible count too; ordinary people get no
 });
 
 test("The order sits on every speaker card and in the global policy of every AI request", () => {
-  assert.match(source, /try \{ extreme = extremeNatureDirective\(w, c\); \} catch \(error\) \{ extreme = ""; \}\n      return \[owner, extreme, style, personaBlock, bible\]/);
+  assert.match(source, /try \{ extreme = \[extremeNatureDirective\(w, c\), playerTypeDirective\(w, c\)\]\.filter\(Boolean\)\.join\("\\n"\); \} catch \(error\) \{ extreme = ""; \}\n      return \[owner, extreme, style, personaBlock, bible\]/);
   assert.match(policy, /EXTREME PERSONALITIES — HARD CONTRACT/);
   assert.match(policy, /does NOT dilute these characters/);
   assert.match(policy, /\$\{ACTIVE_LANGUAGE_POLICY\}\\n\$\{EXTREME_PERSONALITY_POLICY\}/);
@@ -68,4 +68,15 @@ test("R81: extreme orders never invite invented events, and carry the speaker's 
   assert.match(body, /never invent that someone was late, was with someone, hid something/);
   assert.match(body, /narration about " \+ name \+ " uses exactly these pronouns/);
   assert.match(policy, /never invent lateness, secret meetings, a rival, a third person/);
+});
+
+test("R92: a player / fuckboy keeps it cool — never possessive, never 'you're mine'", () => {
+  const ctx = vm.createContext({ String, RegExp, isHuman: () => false });
+  vm.runInContext(pick(["playerTypeDirective"]), ctx);
+  const d = ctx.playerTypeDirective({}, { id: "b", name: "Brent", personality: "Cocky fuckboy, never commits." });
+  assert.match(d, /PLAYER TYPE — BRENT/);
+  assert.match(d, /no \"you're mine\"/);
+  assert.equal(ctx.playerTypeDirective({}, { id: "x", name: "Ian", personality: "loyal, protective" }), "");
+  assert.match(source, /trigger: "romantic-jealousy", eventId: event\.id \|\| "", causeText \}/);
+  assert.match(source, /stake = 2; label = "fake-dating";/);
 });
