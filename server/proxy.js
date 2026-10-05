@@ -6980,6 +6980,19 @@ app.get(
 const SIM_LEADER_LEASE_MS = 40000;
 const SIM_LEADER_BY_WORLD = new Map();
 
+/* R76: short client-side diagnostics (why a generated comment did not reach the screen) into the server log. */
+const CLIENT_DIAG_RATE = { minute: 0, count: 0 };
+app.post("/client-diag", (req, res) => {
+  const minute = Math.floor(Date.now() / 60000);
+  if (CLIENT_DIAG_RATE.minute !== minute) { CLIENT_DIAG_RATE.minute = minute; CLIENT_DIAG_RATE.count = 0; }
+  if (++CLIENT_DIAG_RATE.count <= 120) {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const fields = Object.entries(body).slice(0, 12).map(([key, value]) => String(key).replace(/[^\w-]/g, "").slice(0, 30) + "=" + JSON.stringify(String(value).slice(0, 160)));
+    console.info("[client-diag]", fields.join(" "));
+  }
+  res.status(204).end();
+});
+
 app.post("/ai/leader", async (req, res) => {
   const session = await getSessionIdentity(req).catch(() => null);
   if (!session) return res.status(401).json({ leader: true, reason: "no-session" });

@@ -25,6 +25,7 @@ function harness(rels, romance = {}) {
     socialFriendHostilitySignal: (t) => (/who asked|for once/i.test(t) ? 1 : 0),
     aiVoice: (w, id) => id,
     disrespectsAuthority: () => false,
+    reportClientDiag: () => {},
   });
   vm.runInContext(pick(["relationshipIsHostile", "WARM_COMMENT_RE", "SARCASM_MARK_RE", "cannotStandForComments", "warmLineToSomeoneTheyCannotStand", "hostileCommentPairsInstruction", "nameOfIn", "filterDisrespectToAuthority"]), context);
   return context;

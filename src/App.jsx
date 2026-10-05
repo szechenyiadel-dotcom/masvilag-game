@@ -3291,6 +3291,7 @@ function filterDisrespectToAuthority(n, rows, addresseeOf) {
     /* R67 */
     if (who && to && warmLineToSomeoneTheyCannotStand(n, who, to, row.text)) {
       console.info("[hostile-warmth] dropped a sweet comment to someone the speaker can't stand", "speaker=" + who, "to=" + to, String(row.text).slice(0, 120));
+      reportClientDiag("comment-drop", { reason: "hostile-warmth", who, to, text: row.text });
       return false;
     }
     return true;
@@ -5304,6 +5305,8 @@ function findNaturalThreadReply(w, onlyPostId = "") {
       /* Csak a ténylegesen friss feed él tovább automatikusan. Egy régi
        * threadet az AI nem ás elő magától; a játékos friss válasza külön út. */
       if (now() - (Number(comment.ts) || 0) > LIVE_WORLD_REPLY_WINDOW_MS) continue;
+      /* R76: and only while the post itself is live */
+      if (!postStillLive(post)) continue;
 
       const targets = naturalCommentReplyTargets(w, post, comment);
       for (let k = 0; k < targets.length; k++) {
@@ -7994,7 +7997,12 @@ const LIVE_WORLD_POST_TARGET_MS = Math.max(
     Number(import.meta.env.VITE_WORLD_POST_INTERVAL_MS) || 100 * 1000
   )
 );
-const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = 10 * 60 * 1000; // exact 10-minute top-level comment window
+/* R76 (owner's rule): a fresh post is alive for 6 minutes — comments AND reply comments happen in that window, and
+   after it the thread goes quiet (no AI comment, no AI reply, no coverage retry). */
+const LIVE_WORLD_FRESH_COMMENT_WINDOW_MS = 6 * 60 * 1000;
+function postStillLive(post, at = now()) {
+  return Boolean(post) && at - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
+}
 const LIVE_WORLD_REPLY_WINDOW_MS = 5 * 60 * 1000; // a comment/reply must be answered within 5 minutes or the thread goes quiet
 const LIVE_WORLD_FRESH_COMMENT_GAP_MS = Math.max(8000, Math.min(90000, Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_GAP_MS) || 12000));
 const LIVE_WORLD_FRESH_COMMENT_MAX = Math.max(8, Math.min(22, Math.round(Number(import.meta.env.VITE_WORLD_FRESH_COMMENT_MAX) || 16)));
@@ -10001,8 +10009,11 @@ function legacyVoiceStyleCleanGeneratedComment(w, id, text, maxLen = 240) {
   if (!t) return "";
 
   /* Dedicated feed history first, then the universal cross-surface guard. */
-  if (isRepetitiveComment(w, id, t)) return "";
-  if (isRepetitiveUtterance(w, id, t)) return "";
+  if (isRepetitiveComment(w, id, t)) { reportClientDiag("comment-drop", { reason: "repeats-own-comment", who: id, text: t }); return ""; }
+  /* R76: the DM/scene repetition guard (same first 26 letters, any shared 4-word phrase, 52% word overlap) threw away
+     ordinary comments such as "See you there, Tandy." because the character once said something similar in a DM.
+     A comment is only a repeat of a DM/scene line when it is (nearly) the same sentence. */
+  if (isRepeatedUtteranceForComment(w, id, t)) { reportClientDiag("comment-drop", { reason: "repeats-own-line", who: id, text: t }); return ""; }
 
   if (t.length <= maxLen) return t;
   /* CLAUDE FIX R18/R37: never cut a comment mid-sentence */
@@ -10222,6 +10233,8 @@ function guaranteedCommentCoverageCandidate(w) {
     (w.posts || [])
       .filter((post) => {
         if (!post || !post.id || !post.authorId) return false;
+        /* R76: coverage only while the post is live */
+        if (!postStillLive(post, ts)) return false;
         const coverage = postCommentCoverageState(w, post);
         if (coverage.complete || coverage.missing <= 0) return false;
         const attemptedAt = Number(post.commentCoverageAttemptAt) || 0;
@@ -11546,6 +11559,32 @@ function jaccard(a, b) {
   let hit = 0;
   a.forEach((x) => { if (b.has(x)) hit++; });
   return hit / (a.size + b.size - hit);
+}
+
+function isRepeatedUtteranceForComment(w, id, text) {
+  const base = normUtterance(text);
+  if (!base || base.split(" ").filter(Boolean).length < 4) return false;
+  const mine = wordSet(base);
+  return recentUtterancesFor(w, id, 32).some((line) => {
+    const old = normUtterance(line);
+    return Boolean(old) && (old === base || jaccard(mine, wordSet(old)) >= 0.85);
+  });
+}
+
+/* R76: a few client-side facts (why a generated comment did not make it to the screen) go to the server log, so a
+   problem on the player's device can be seen there. Fire-and-forget, at most 40 a minute, short texts only. */
+const CLIENT_DIAG = { minute: 0, count: 0 };
+function reportClientDiag(kind, data = {}) {
+  try {
+    const minute = Math.floor(Date.now() / 60000);
+    if (CLIENT_DIAG.minute !== minute) { CLIENT_DIAG.minute = minute; CLIENT_DIAG.count = 0; }
+    if (++CLIENT_DIAG.count > 40) return;
+    const payload = { kind: String(kind || "").slice(0, 40) };
+    Object.entries(data || {}).slice(0, 12).forEach(([key, value]) => { payload[String(key).slice(0, 30)] = String(value === undefined ? "" : value).slice(0, 160); });
+    if (typeof fetch === "function" && typeof backendUrl === "function") {
+      fetch(backendUrl("/client-diag"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).catch(() => {});
+    }
+  } catch (error) { /* diagnostics never break the game */ }
 }
 
 function isRepetitiveUtterance(w, id, text) {
@@ -26770,7 +26809,7 @@ function legacyChannelApplyComments(n, postId, out, label) {
       /* Egy karakter egy körben egy friss komment: több variációt ne spammeljen. */
       if (commentedThisBatch.has(who)) return;
 
-      if (isUncharacteristicGenericComment(n, who, c.text)) return;
+      if (isUncharacteristicGenericComment(n, who, c.text)) { reportClientDiag("comment-drop", { reason: "generic", who, text: c.text }); return; }
 
       let body = cleanGeneratedComment(n, who, c.text, 240);
       if (!body) return;
@@ -26845,7 +26884,7 @@ if (!parent && tag) {
         return repliedToActor || directlyMentioned;
       });
 
-    if (!reentry) return;
+    if (!reentry) { reportClientDiag("comment-drop", { reason: "already-commented", who, text: c.text }); return; }
     parent = reentry.id;
   }
 }
@@ -26887,6 +26926,7 @@ if (
     body
   )
 ) {
+  reportClientDiag("comment-drop", { reason: "out-of-scope", who, text: body });
   return;
 }
 
@@ -26913,6 +26953,7 @@ if (
 ${p.imageDescription || ""}`
   )
 ) {
+  reportClientDiag("comment-drop", { reason: "contradicts-relationship", who, to: targetId, text: body });
   return;
 }
 
@@ -41225,6 +41266,10 @@ function findUnanswered(w) {
       if (tsNow - (Number(playerComment.ts) || 0) > 45 * 60000) {
         continue;
       }
+      /* R76: once the post's 6 live minutes are over, nobody answers under it any more */
+      if (!postStillLive(po, tsNow)) {
+        continue;
+      }
 
       const parentComment = playerComment.parent
         ? cs.find((c) => c && c.id === playerComment.parent)
@@ -41421,7 +41466,7 @@ function ensureSimState(w) {
       action.payload &&
       action.payload.trigger === "guaranteed-coverage"
     ) {
-      return !postCommentCoverageState(w, post).complete;
+      return !postCommentCoverageState(w, post).complete && postStillLive(post);
     }
     return now() - (Number(post.ts) || 0) <= LIVE_WORLD_FRESH_COMMENT_WINDOW_MS;
   });
@@ -54318,6 +54363,7 @@ async function legacyFullSpecRunSimulationAction(view, update, action, addImage)
     const afterPost = (n.posts || []).find((row) => row && row.id === post.id);
     const after = afterPost ? safePostComments(afterPost).length : before;
     const appliedCount = Math.max(0, after - before);
+    reportClientDiag("player-post-comments", { post: post.id, usable: combinedRows.length, applied: Math.max(0, (afterPost ? safePostComments(afterPost).length : before) - before) });
     playerPostCommentDiagnostic(n, afterPost || post, "saved", {
       aiCalls: calls,
       provider: label || "unknown",
@@ -55257,6 +55303,10 @@ if (action.type === "roleplay-initiate") {
       return null;
     }
     if (now() - (Number(comment.ts) || 0) > LIVE_WORLD_REPLY_WINDOW_MS) {
+      return null;
+    }
+    /* R76: no reply once the post's 6 live minutes are over */
+    if (!postStillLive(post)) {
       return null;
     }
 
@@ -62158,12 +62208,14 @@ function cleanGeneratedComment(...args) {
     const stranger = generatedTextUnknownPersonName(w, args[2]);
     if (stranger) {
       console.warn("[unknown-name] dropped generated comment", "character=" + String(id || ""), "name=" + stranger, String(args[2]).slice(0, 120));
+      reportClientDiag("comment-drop", { reason: "unknown-name", who: id, name: stranger, text: args[2] });
       return "";
     }
   } catch (error) { /* keep the comment */ }
   const base = legacyVoiceStyleCleanGeneratedComment(...args);
   if (generatedTextHasTechLeak(base)) {
     console.warn("[tech-leak] dropped generated comment", "character=" + String(id || ""), String(base || "").slice(0, 120));
+    reportClientDiag("comment-drop", { reason: "tech-leak", who: id, text: base });
     return "";
   }
   return applyCharacterVoiceStyle(w, id, base);
