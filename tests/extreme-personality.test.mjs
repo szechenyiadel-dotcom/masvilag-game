@@ -61,3 +61,11 @@ test("The order sits on every speaker card and in the global policy of every AI 
   assert.match(policy, /does NOT dilute these characters/);
   assert.match(policy, /\$\{ACTIVE_LANGUAGE_POLICY\}\\n\$\{EXTREME_PERSONALITY_POLICY\}/);
 });
+
+test("R81: extreme orders never invite invented events, and carry the speaker's pronouns", () => {
+  const body = pick(["EXTREME_NATURES", "extremeNatureDirective"]);
+  assert.doesNotMatch(body, /demanding to know where they were and with whom/);
+  assert.match(body, /never invent that someone was late, was with someone, hid something/);
+  assert.match(body, /narration about " \+ name \+ " uses exactly these pronouns/);
+  assert.match(policy, /never invent lateness, secret meetings, a rival, a third person/);
+});

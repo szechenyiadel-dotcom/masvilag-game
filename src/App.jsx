@@ -61993,9 +61993,9 @@ const EXTREME_NATURES = [
   { key: "psychopath", re: /psycho|sociopath|pszichop|sz[oó]ciop|no empathy|lacks? empathy|empathy[^.\n]{0,12}(?:zero|none)|empátia[^.\n]{0,12}(?:nincs|nulla)|cold[- ]blooded|hidegvér/i,
     order: "a psychopath: no real empathy or guilt; calm, controlled, sometimes charming on the surface and cold underneath; manipulates and uses people; never sincerely apologises; a quiet, believable menace sits under what they say; they enjoy control" },
   { key: "obsessed", re: /obsess|megsz[aá]ll|fixat|yandere|stalk|k[oö]vet[oő]\s*m[aá]ni|cannot let (?:her|him|them) go|nem tudja elengedni/i,
-    order: "obsessed: fixated on the person they are obsessed with — they notice everything about them, every post, every like, who they talk to; they cannot let it go, keep circling back to them, get intense, needy, controlling or menacing about them, and see anyone close to them as a threat" },
+    order: "obsessed: fixated on the person they are obsessed with — they notice everything that person REALLY does (real posts, real likes, the people they really talk to); they cannot let it go, keep circling back to them, get intense, needy, controlling or menacing about them, and see anyone close to them as a threat" },
   { key: "possessive", re: /possess|birtokl|territorial|tulajdon[aá]nak tekint|jealous to the extreme|betegesen f[eé]lt[eé]keny/i,
-    order: "possessive: treats the person they want as theirs; open, territorial jealousy, warning others off, demanding to know where they were and with whom" },
+    order: "possessive: treats the person they want as theirs; open, territorial jealousy about what really happened, warning others off" },
   { key: "sadistic", re: /sadis|szadis|cruel|kegyetlen|enjoys? (?:others'? )?(?:pain|suffering)/i,
     order: "cruel: enjoys others' discomfort; cutting, humiliating, merciless, and never softens it into a joke" },
   { key: "manipulative", re: /manipul|gaslight|mind games|játszmáz/i,
@@ -62041,11 +62041,19 @@ function extremeNatureDirective(w, c) {
       .map((id) => nameOfIn(w, id));
   } catch (error) { targets = []; }
   const name = String(c.name || "").toUpperCase();
+  /* R81: Venice mixed up who "she" is mid-threat ("I will find them herself") — the speaker's own pronouns go with the order */
+  let pronounNote = "";
+  try {
+    const pronouns = typeof identityPronouns === "function" ? String(identityPronouns(c) || "") : "";
+    if (/^(?:he\/him|she\/her|they\/them)$/.test(pronouns)) pronounNote = " " + name + " is " + pronouns + " — narration about " + name + " uses exactly these pronouns.";
+  } catch (error) { pronounNote = ""; }
   return "EXTREME NATURE OF " + name + " — HARD RULE, FROM THEIR OWN SHEET: " + name + " is " + found.map((row) => row.order).join("; and ") + "." +
     (targets.length ? " Their fixation: " + targets.join(", ") + "." : "") +
     (found.some((row) => row.key === "obsessed" || row.key === "possessive")
       ? " The obsession / possessiveness is aimed ONLY at " + (targets.length ? targets.join(", ") : "the person their sheet names") + " — friends and everyone else are never treated as theirs, never get \"you're mine\" or territorial jealousy."
       : "") +
+    " The intensity is about what REALLY happened in the record and in this conversation — never invent that someone was late, was with someone, hid something, or any past event, rival or third person to react to; a \"her\" / \"him\" always means someone actually named here." +
+    pronounNote +
     " Play this at FULL strength in every DM, comment, post, group chat and scene they write — it is who they are, not a mood that needs a trigger. Never soften it, never make them suddenly nice, polite, reasonable or self-aware about it, no therapy talk, no redemption. Fictional adults only; never write the player's actions, feelings or consent.";
 }
 
