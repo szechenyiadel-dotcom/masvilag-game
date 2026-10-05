@@ -61,3 +61,19 @@ test("The player's post gets 5-8 comments instead of 3-6", () => {
 test("R78: the stricter language retry does not use up a DM's only try", () => {
   assert.match(source, /if \(!strictMode\) \{\n\s+\/\*[\s\S]*?\*\/\n\s+strictMode = true;\n\s+continue;\n\s+\}/);
 });
+
+test("R87: in fake dating real feelings only leak; a player / fuckboy admits them much harder", () => {
+  const body = pick(["fakeDatingBehaviorCard"]);
+  assert.match(body, /only LEAK/);
+  assert.match(body, /does not happen in an ordinary DM/);
+  assert.match(body, /fuck \?boy/);
+  assert.doesNotMatch(body, /your real feelings show"/);
+});
+
+test("hush: every old screen stays reachable (phone menu + Me links)", () => {
+  assert.match(source, /\{\[\.\.\.SIDE_MAIN, \.\.\.SIDE_SUB\]\.map\(/);
+  assert.match(source, /const SIDE_SUB = \[\["cast"[^\n]*\["bonds"[^\n]*\["world"/);
+  assert.match(source, /onGo\("cast"\)/);
+  assert.match(source, /onGo\("world"\)/);
+  assert.match(source, /onGo\("bonds"\)/);
+});

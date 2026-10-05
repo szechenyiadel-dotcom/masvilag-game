@@ -2066,6 +2066,14 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
   .popup-event-sheet { max-width:560px; padding:28px; }
 }
 
+/* phone menu drawer */
+.hush-drawer { padding:20px 18px calc(22px + env(safe-area-inset-bottom)); }
+.hush-drawer-item { width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:52px;
+  padding:8px 14px; margin-top:4px; border:0; border-radius:var(--whisper); background:transparent; color:var(--text-dim);
+  font-family:var(--serif); font-size:27px; line-height:1.1; text-align:left; cursor:pointer; }
+.hush-drawer-item.on { color:var(--text); font-style:italic; background:linear-gradient(90deg, rgba(18,128,76,.32), rgba(18,128,76,.04)); }
+.hush-link-row .btn { flex:1 1 auto; }
+
 /* overlays */
 .scrim { background:rgba(2,5,3,.78); }
 .sheet { background:var(--card-grad); border:1px solid var(--card-line); }
@@ -2832,7 +2840,7 @@ function HushMeter({ value, label, max = 100, signed = true }) {
 }
 
 /* hush "Me": name, reputation, how the others feel about you, and what they whisper about you */
-function MeProfile({ w, onGo, onCompose, onOpenWorlds, onOpenPost }) {
+function MeProfile({ w, onGo, onCompose, onOpenWorlds, onOpenPost, onOpenOwnProfile }) {
   const { tt } = useLang();
   const me = w.player || {};
   const stats = (w.socialStats && w.socialStats[w.meId]) || defaultSocialStatsRow();
@@ -2854,6 +2862,16 @@ function MeProfile({ w, onGo, onCompose, onOpenWorlds, onOpenPost }) {
           <h1 className="hush-me-name">{me.name}</h1>
           <div className="hush-me-handle">@{me.username}</div>
         </div>
+      </div>
+
+      <div className="hush-link-row">
+        <button type="button" className="btn primary" onClick={onCompose}><Plus size={15} /> {tt("Suttogj valamit", "Whisper something")}</button>
+        <button type="button" className="btn" onClick={onOpenOwnProfile}>{tt("Profilom: posztok, követők", "My profile: posts, followers")}</button>
+        <button type="button" className="btn" onClick={() => onGo("cast")}>{tt("Karakterek · új karakter · saját lapom", "Characters · add character · my sheet")}</button>
+        <button type="button" className="btn" onClick={() => onGo("bonds")}>{tt("Kapcsolatok szerkesztése", "Edit bonds")}</button>
+        <button type="button" className="btn" onClick={() => onGo("world")}>{tt("Világ: leírás, beállítások", "World: description, settings")}</button>
+        <button type="button" className="btn" onClick={() => onGo("chat")}>{tt("Suttogások", "Whispers")}</button>
+        <button type="button" className="btn ghost" onClick={onOpenWorlds}>{tt("Világaim", "My worlds")}</button>
       </div>
 
       <div className="card">
@@ -2893,14 +2911,6 @@ function MeProfile({ w, onGo, onCompose, onOpenWorlds, onOpenPost }) {
         </div>
       )) : <div className="hint" style={{ marginTop: 8 }}>{tt("Rólad még nem suttognak.", "Nobody is whispering about you yet.")}</div>}
 
-      <div className="hush-link-row">
-        <button type="button" className="btn primary" onClick={onCompose}><Plus size={15} /> {tt("Suttogj valamit", "Whisper something")}</button>
-        <button type="button" className="btn" onClick={() => onGo("chat")}>{tt("Suttogások", "Whispers")}</button>
-        <button type="button" className="btn" onClick={() => onGo("cast")}>{tt("Karakterek és saját lapom", "Characters & my sheet")}</button>
-        <button type="button" className="btn" onClick={() => onGo("bonds")}>{tt("Kapcsolatok", "Bonds")}</button>
-        <button type="button" className="btn" onClick={() => onGo("world")}>{tt("Világ és beállítások", "World & settings")}</button>
-        <button type="button" className="btn ghost" onClick={onOpenWorlds}>{tt("Világaim", "My worlds")}</button>
-      </div>
     </div>
   );
 }
@@ -30576,7 +30586,7 @@ function AlbumPick({ items, value, onPick }) {
   );
 }
 
-function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal, mode = "feed", composeOpen = false, onCompose, onComposeClose }) {
+function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onRequestWorldStep, onRequestNoteReactions, onSignal, mode = "feed", composeOpen = false, onCompose, onComposeClose, profileReq = null }) {
   const { tt } = useLang();
   const { media } = useMedia();
   /* hush: the same feed, shown as the gossip "Whisper wall" when mode === "gossip" */
@@ -30592,6 +30602,10 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [profileId, setProfileId] = useState("");
   /* All posts stay in world state. Only mounted feed DOM is windowed. */
   const [visiblePostLimit, setVisiblePostLimit] = useState(60);
+  /* hush: "My profile" on the Me screen opens the same social profile as the avatar did */
+  useEffect(() => {
+    if (profileReq && profileReq.id) setProfileId(profileReq.id);
+  }, [profileReq]);
 
   const activeMedia =
     activeGossipMediaAccount(
@@ -30932,7 +30946,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       />
       )}
 
-      {activeMedia && wallMode ? (
+      {activeMedia ? (
         <div className="social-media-account-bar">
           <button
             type="button"
@@ -57630,6 +57644,9 @@ export default function App() {
   const [showNotes, setShowNotes] = useState(false);
   /* hush: the "Suttogj valamit" composer opens as its own screen */
   const [composeOpen, setComposeOpen] = useState(false);
+  /* hush: the full menu on phones (every old screen stays one tap away) and "open my own profile" requests */
+  const [navOpen, setNavOpen] = useState(false);
+  const [profileReq, setProfileReq] = useState(null);
   const [auto, setAutoCfg] = useState(AUTO_DEFAULT);
   const [autoBusy, setAutoBusy] = useState(false);
   const autoRunning = useRef(false);
@@ -61145,6 +61162,7 @@ const signOut = useCallback(async () => {
   const openCompose = () => { setTab("feed"); setComposeOpen(true); };
   const goTab = (k) => {
     setComposeOpen(false);
+    setNavOpen(false);
     setTab(k);
     /* a new screen starts at its top */
     try { const main = document.querySelector(".mv-main"); if (main) main.scrollTop = 0; } catch (error) { /* no DOM */ }
@@ -61213,6 +61231,9 @@ const signOut = useCallback(async () => {
                         : <span className="dot" style={{ background: auto.on ? "var(--rose)" : "var(--muted)", animation: auto.on ? undefined : "none" }} />}
             </button>
             <AiStatusChip />
+            <button className="btn tiny ghost hush-mobile-only" onClick={() => setNavOpen(true)} title={tt("Menü", "Menu")} aria-label={tt("Menü", "Menu")}>
+              <span style={{ fontSize: 17, lineHeight: 1 }}>☰</span>
+            </button>
             <button className="btn tiny ghost hush-icon-btn hush-mobile-only" onClick={() => goTab("chat")} title={tt("Suttogások", "Whispers")}>
               <MessageCircle size={16} color={tab === "chat" ? "var(--poison)" : undefined} />
               {unreadDms > 0 && <span className="badge">{unreadDms > 9 ? "9+" : unreadDms}</span>}
@@ -61242,8 +61263,10 @@ const signOut = useCallback(async () => {
             onSignal={signalSimulation}
             composeOpen={composeOpen && tab === "feed"}
             onCompose={openCompose}
-            onComposeClose={() => setComposeOpen(false)} />}
+            onComposeClose={() => setComposeOpen(false)}
+            profileReq={tab === "feed" ? profileReq : null} />}
           {tab === "me" && <MeProfile w={view} onGo={goTab} onCompose={openCompose} onOpenWorlds={() => setShowRooms(true)}
+            onOpenOwnProfile={() => { setProfileReq({ id: meId, n: now() }); goTab("feed"); }}
             onOpenPost={(id) => { setTab("gossip"); setJump({ type: "post", id, n: now() }); }} />}
           {tab === "cast" && <Cast w={view} update={update} setErr={setErr} jump={jump} goChat={(id) => { setChatId(id); setTab("chat"); }} />}
           {tab === "bonds" && <Bonds w={view} update={update} setErr={setErr} />}
@@ -61313,6 +61336,29 @@ const signOut = useCallback(async () => {
           <button onClick={() => setErr("")}><X size={14} /></button>
         </div>
       )}
+
+      {navOpen ? (
+        <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) setNavOpen(false); }}>
+          <div className="sheet hush-drawer" role="dialog" aria-label={tt("Menü", "Menu")}>
+            <div className="between">
+              <HushMark />
+              <button type="button" className="btn tiny ghost" onClick={() => setNavOpen(false)} aria-label={tt("Bezárás", "Close")}><X size={16} /></button>
+            </div>
+            {[...SIDE_MAIN, ...SIDE_SUB].map(([k, label]) => (
+              <button key={k} type="button" className={"hush-drawer-item" + (tab === k ? " on" : "")} onClick={() => goTab(k)}>
+                <span>{label}</span>
+                {k === "chat" && unreadDms > 0 ? <span className="hush-dm-count">{Math.min(99, unreadDms)}</span> : null}
+              </button>
+            ))}
+            <button type="button" className="hush-drawer-item" onClick={() => { setNavOpen(false); setShowRooms(true); }}>
+              <span>{tt("Világaim", "My worlds")}</span>
+            </button>
+            <button type="button" className="btn primary full" style={{ marginTop: 14 }} onClick={() => { setNavOpen(false); openCompose(); }}>
+              <Plus size={16} /> {tt("Suttogj valamit", "Whisper something")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <nav className="hush-tabbar" aria-label={tt("Fő menü", "Main menu")}>
         <div className="hush-tabs">
@@ -64922,13 +64968,23 @@ function isFakeDatingText(value) {
 function fakeDatingBehaviorCard(w, actorId, targetId) {
   const rel = getRel(w, actorId, targetId) || EMPTY_REL;
   const reverse = getRel(w, targetId, actorId) || EMPTY_REL;
-  if (!isFakeDatingText(rel.bond || rel.type) && !(reverse.whoKnows?.includes(actorId) && isFakeDatingText(reverse.bond || reverse.type))) return "";
+  /* R87: the reading may put "fake dating" into the label / description / layers instead of the bond word */
+  const saysFake = (r) => [r.bond, r.type, r.label, r.role, r.description, ...(Array.isArray(r.layers) ? r.layers : [])].filter(Boolean).some((v) => isFakeDatingText(v));
+  if (!saysFake(rel) && !(reverse.whoKnows?.includes(actorId) && saysFake(reverse))) return "";
   const en = worldLanguage(w, w && w.meId) === "en";
   const target = nameOfIn(w, targetId);
   const real = [rel.mood, rel.hidden].filter(Boolean).join("; ");
+  /* a player / fuckboy / commitment-shy type admits real feelings much harder */
+  const actor = charById(w, actorId) || {};
+  const nature = [actor.personality, actor.traits, actor.extra, actor.speech].filter(Boolean).join(" ");
+  const guarded = /fuck ?boy|f\*ckboy|playboy|player\b|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
   return en
-    ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. In private (DMs, scenes with only the two of you) your real feelings show" + (real ? " (" + real + ")" : "") + ". Never reveal publicly that it is fake."
-    : "ÁLKAPCSOLAT " + target + " FELÉ: ti ketten csak ELJÁTSSZÁTOK, hogy egy pár vagytok. Nyilvánosan (posztok, kommentek, közös események) tartsátok fenn a látszatot — páros viselkedés, becenevek, a „kapcsolat” védelme, partnerként reagálás. Privátban (DM, kettesben zajló jelenet) a valódi érzéseid látszanak" + (real ? " (" + real + ")" : "") + ". Nyilvánosan soha ne áruld el, hogy kamu.";
+    ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. Never reveal publicly that it is fake." +
+      " In private (DMs, scenes with only the two of you) the real feelings" + (real ? " (" + real + ")" : "") + " only LEAK — a look held too long, jealousy you deny, staying longer than the deal needs, a softer moment you immediately joke away. Liking them or wanting them is fine to show; ADMITTING that you feel more, that it is not fake for you any more, does not happen in an ordinary DM: you deflect ('it's part of the act', 'don't flatter yourself', a joke, a flirt, a change of subject) and get colder if pressed." +
+      (guarded ? " You are the player / commitment-shy type: admitting real feelings is the LAST thing you would do — only after many significant moments, under real pressure (jealousy, almost losing them), and even then half-said and taken back." : "")
+    : "ÁLKAPCSOLAT " + target + " FELÉ: ti ketten csak ELJÁTSSZÁTOK, hogy egy pár vagytok. Nyilvánosan (posztok, kommentek, közös események) tartsátok fenn a látszatot — páros viselkedés, becenevek, a „kapcsolat” védelme, partnerként reagálás. Nyilvánosan soha ne áruld el, hogy kamu." +
+      " Privátban (DM, kettesben zajló jelenet) a valódi érzéseid" + (real ? " (" + real + ")" : "") + " csak KISZIVÁROGNAK — egy túl hosszú pillantás, letagadott féltékenység, tovább maradsz, mint ami a deal része, egy lágyabb pillanat, amit azonnal elviccelsz. Hogy tetszik vagy kívánod, az látszhat; BEVALLANI, hogy többet érzel, hogy neked már nem kamu, egy hétköznapi DM-ben nem fogod: terelsz („ez a szerep része”, „ne képzeld”, poén, flört, témaváltás), és ha erőltetik, hidegebb leszel." +
+      (guarded ? " Te a csajozós / elköteleződéstől menekülő típus vagy: az érzéseid bevallása az utolsó, amit megtennél — csak sok jelentős pillanat után, valódi nyomás alatt (féltékenység, majdnem elveszíted), és akkor is félig kimondva, visszavonva." : "");
 }
 
 
