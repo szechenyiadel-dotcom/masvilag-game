@@ -61,9 +61,8 @@ test("A DM the player waits on goes to Mistral first, then the uncensored OpenRo
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
   assert.deepEqual(order("dm", { foreground: true }), ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"], "player-waiting dm: Mistral (Medium) writes it, Gemma and Venice are the uncensored fallbacks");
   assert.deepEqual(order("dm"), ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"], "unprompted dm: free first, paid Venice last (R78)");
-  for (const extra of [{}, { foreground: true }]) {
-    assert.deepEqual(order("scene", extra), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "scene " + JSON.stringify(extra));
-  }
+  assert.deepEqual(order("scene", { foreground: true }), ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"], "a scene turn the player waits on: Mistral first");
+  assert.deepEqual(order("scene"), ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"], "a scene the world writes on its own keeps its chain");
   /* Comments, player-waiting or background: free OpenRouter -> free Gemini -> paid OpenAI -> paid OpenRouter (Venice). */
   const commentChain = ["openrouter-dm-dolphin", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
   assert.deepEqual(order("comments"), commentChain);
@@ -188,6 +187,15 @@ test("A DM is written by Mistral Medium unless the environment says otherwise", 
   assert.equal(legacy.context.providerModel("mistral", { source: "dm" }), "mistral-large-latest", "the old variable name still works");
 });
 
+test("A scene turn the player waits on is written by Mistral Medium; a scene the world writes on its own stays on Small", () => {
+  const { context } = gate(ENV, () => ok("x"));
+  assert.equal(context.providerModel("mistral", { source: "scene", foreground: true }), "mistral-medium-latest");
+  assert.equal(context.providerModel("mistral2", { source: "scene", foreground: true }), "mistral-medium-latest");
+  assert.equal(context.providerModel("mistral", { source: "scene" }), "mistral-small-latest");
+  const small = gate({ ...ENV, MISTRAL_SCENE_MODEL: "mistral-small-latest" }, () => ok("x"));
+  assert.equal(small.context.providerModel("mistral", { source: "scene", foreground: true }), "mistral-small-latest", "the environment decides");
+});
+
 test("A player waiting on a DM starts on Mistral, and when both Mistral keys are out Gemma writes it", async () => {
   const { context, calls } = gate(ENV, (provider) => (provider === "mistral" ? ok(provider) : quota(provider)));
   const result = await context.executeAITask(task(context, "dm", { foreground: true }));
@@ -305,6 +313,7 @@ test("Everything that gives a character a voice keeps its own chain, Groq only a
   assert.equal(order("dm", { foreground: true })[0], "mistral");
   assert.equal(order("dm", { foreground: true })[3], "openrouter-dm-venice");
   assert.equal(order("scene")[0], "openrouter-dm-dolphin");
+  assert.equal(order("scene", { foreground: true })[0], "mistral");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "openrouter-dm-dolphin", source);
   assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
   assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
@@ -865,7 +874,8 @@ test("Final OpenRouter routing: the first slot runs Gemma 4 31B (free) on the fu
   assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
   assert.match(source, /const openRouter3Key = process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY;\n\s+let result = await proxyCompatibleMessage\("openrouter3", openRouter3Key/, "R78: Nemotron on the funded key 2");
-  assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/);
+  assert.match(source, /\? \["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"\]\n\s+: \["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"\]/, "a scene: Mistral first when the player waits, the old chain when the world writes it");
+  assert.match(source, /raw = \["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"\]/, "a DM the player waits on: Mistral first");
   assert.match(source, /provider === "openrouter-dm-dolphin"\n\s+\/\* R74[^\n]*\*\/\n\s+\? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ enabled: false, exclude: true \} \}/);
   assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openai"\]/);
   assert.match(source, /raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "openai", "openrouter-dm-venice"\]/);

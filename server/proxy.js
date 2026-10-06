@@ -5223,7 +5223,7 @@ function providerModel(provider, body = {}) {
   const requested = String(body?.model || "").trim();
   if (provider === "mistral" || provider === "mistral2") {
     const source = String(body?.source || "").trim().toLowerCase();
-    if (source === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-small-latest").trim();
+    if (source === "scene") return String(process.env.MISTRAL_SCENE_MODEL || (isForegroundRequest(body) ? "mistral-medium-latest" : "mistral-small-latest")).trim();
     if (source === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(source) || source.includes("player-post-comment")) return String(process.env.MISTRAL_COMMENT_MODEL || "mistral-small-latest").trim();
     if (source === "dm") return String(process.env.MISTRAL_DM_MODEL || process.env.MISTRAL_DM_FALLBACK_MODEL || "mistral-medium-latest").trim();
     if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-large-latest").trim();
@@ -5715,8 +5715,12 @@ function taskProviderOrder(requestedProvider, body) {
     /* R85 (owner's rule): popups never use a paid provider, not even when the player is waiting */
     raw = ["gemini", "groq", "groq2", "openrouter3"];
   } else if (source === "scene") {
-    /* Scenes: Dolphin (OpenRouter key 1) -> Venice (OpenRouter key 2, paid) -> Mistral 1 -> Mistral 2. */
-    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
+    /* A scene turn the player waits on: Mistral first (Medium) — Gemma is rate-limited most of the time and the Venice
+       Dolphin-Mistral 24B wrote lines that did not follow the scene (and often no JSON at all, which cost a second
+       call). A scene the world writes on its own keeps Dolphin (Gemma) -> Venice -> Mistral 1 -> Mistral 2. */
+    raw = playerWaiting
+      ? ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"]
+      : ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (isComment) {
     /* Comments — the ones the player waits for and the background ones alike: Dolphin (OpenRouter key 1) ->
        Nemotron :free -> the free Gemini keys -> paid OpenAI -> paid Venice (OpenRouter key 2). */
