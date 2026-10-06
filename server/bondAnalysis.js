@@ -53,6 +53,18 @@ function freeCompatCandidates(env) {
   return out;
 }
 
+/* Reading a sheet is important: when Gemini and the free models cannot, the paid OpenRouter route (the funded key) reads it
+   before OpenAI does (OpenRouter is the first paid provider). BOND_ANALYSIS_OPENROUTER_PAID=off switches it off, and
+   OPENROUTER_DM_PAID_MODEL names the model, as for DMs and scenes. */
+function paidOpenRouterCandidates(env) {
+  if (!env.OPENROUTER_API_KEY_2 || /^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_OPENROUTER_PAID || "").trim())) return [];
+  return [{
+    name: "openrouter",
+    model: String(env.OPENROUTER_DM_PAID_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition").trim(),
+    key: env.OPENROUTER_API_KEY_2, keySlot: "OPENROUTER_API_KEY_2", url: COMPAT_ANALYSIS_URLS.openrouter, maxOutput: 32000,
+  }];
+}
+
 function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -168,6 +180,7 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
   candidates.push(...geminiCandidates(env, modelGroups));
   /* The owner's order for a reading: Gemini -> Groq 1 -> Groq 2 -> Nemotron -> OpenAI. */
   candidates.push(...freeCompatCandidates(env));
+  candidates.push(...paidOpenRouterCandidates(env));
 
   if (openaiFallback(env)) {
     candidates.push({

@@ -595,6 +595,20 @@ test("An incomplete OpenAI answer is never accepted", async () => {
  await assert.rejects(analyzeStructured("full sheet ".repeat(6000), { type: "object" }, () => {}, { candidates: [candidates[1]], transport }), /Incomplete OpenAI analysis: length/);
 });
 
+test("With the funded OpenRouter key a sheet reading goes ... -> Nemotron -> the paid OpenRouter route -> OpenAI; it can be switched off and its model named", () => {
+ const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", OPENROUTER_API_KEY: "or", OPENROUTER_API_KEY_2: "or2", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
+ for (const mode of ["semantic", "profile"]) {
+  const rows = providerCandidates(config, mode);
+  const tail = rows.slice(rows.findIndex(c => c.name !== "gemini")).map(c => c.name + ":" + c.keySlot);
+  assert.deepEqual(tail, ["groq:GROQ_API_KEY", "groq:GROQ_API_KEY_2", "openrouter:OPENROUTER_API_KEY", "openrouter:OPENROUTER_API_KEY_2", "openai:OPENAI_API_KEY"], mode);
+  const paid = rows.find(c => c.keySlot === "OPENROUTER_API_KEY_2");
+  assert.equal(paid.model, "cognitivecomputations/dolphin-mistral-24b-venice-edition");
+  assert.equal(providerCandidates({ ...config, OPENROUTER_DM_PAID_MODEL: "meta-llama/llama-3.3-70b-instruct" }, mode).find(c => c.keySlot === "OPENROUTER_API_KEY_2").model, "meta-llama/llama-3.3-70b-instruct");
+  assert.ok(!providerCandidates({ ...config, BOND_ANALYSIS_OPENROUTER_PAID: "off" }, mode).some(c => c.keySlot === "OPENROUTER_API_KEY_2"), "switch");
+ }
+ assert.ok(!providerCandidates(config, "schema").some(c => c.name === "openrouter"), "schema repair stays on Gemini and OpenAI");
+});
+
 test("A sheet reading goes Gemini -> Groq 1 -> Groq 2 -> Nemotron -> OpenAI; schema repair stays on Gemini and OpenAI", () => {
  const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", OPENROUTER_API_KEY: "or", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
  for (const mode of ["semantic", "profile"]) {

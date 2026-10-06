@@ -8,7 +8,7 @@ import {
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
   createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, salvageSingleFieldJson,
   PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter, createRefusalTracker, orderByRefusals,
-  mayUsePaidLastResort, PAID_LAST_RESORT_PROVIDERS, providerTimeBudget,
+  mayUsePaidLastResort, PAID_LAST_RESORT_PROVIDERS, providerTimeBudget, paidBackgroundProviders, SHEET_READING_SOURCES,
 } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -38,7 +38,7 @@ function gate(env, scripted) {
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
-    mayUsePaidLastResort, PAID_LAST_RESORT_PROVIDERS, providerTimeBudget,
+    mayUsePaidLastResort, PAID_LAST_RESORT_PROVIDERS, providerTimeBudget, paidBackgroundProviders, SHEET_READING_SOURCES,
     isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, salvageSingleFieldJson, createRefusalTracker, orderByRefusals,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
@@ -79,8 +79,24 @@ test("DM and scene: the paid OpenRouter route, Mistral 1, Mistral 2; comments an
     for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
   }
   assert.deepEqual(order("feed-post"), ["openrouter-dm-dolphin", "gemini", "openai"]);
-  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
+  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"]);
   assert.deepEqual(Array.from(FREE_WRITING_CHAIN), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
+});
+
+test("Reading a whole sheet: when Gemini cannot, the free models try, then the paid OpenRouter route, then OpenAI; nothing is cut", async () => {
+  const sheet = { quality: "deep", timeout_ms: 110000, messages: [{ role: "user", content: "S".repeat(150000) }] };
+  const { context, calls } = gate(ENV, (provider) => (provider === "openrouter-dm-venice" ? ok(provider) : quota(provider)));
+  const result = await context.executeAITask(task(context, "character-bible", sheet));
+  assert.equal(result.ok, true);
+  assert.equal(result.provider, "openrouter-dm-venice", "the paid OpenRouter route read it");
+  const order = Array.from(calls);
+  assert.equal(order[0], "gemini");
+  assert.ok(order.includes("openrouter3") && order.includes("openrouter-dm-dolphin"), "the free OpenRouter models were tried first: " + order);
+  assert.ok(order.indexOf("openrouter-dm-venice") > order.indexOf("openrouter3"), "and the paid one after them");
+  assert.ok(!order.includes("mistral") && !order.includes("mistral2"), "never Mistral for a sheet");
+  assert.deepEqual(Array.from(context.paidBackgroundProviders("character-bible")), ["openrouter-dm-venice", "openai"]);
+  assert.deepEqual(Array.from(context.paidBackgroundProviders("feed-post")), ["openai"], "other writing: OpenAI only, as the last one");
+  assert.deepEqual(Array.from(context.paidBackgroundProviders("popup")), [], "popups never");
 });
 
 test("Feed goes Gemma, then every Gemini key, then OpenAI last", () => {
@@ -262,7 +278,7 @@ function groqPath({ env = {}, respond, pacer = createGroqPacer() } = {}) {
     process: { env }, console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error, AbortController, setTimeout, clearTimeout,
     planGroqRequest, isForegroundRequest, estimateGroqTokens, groqPaceMaxWaitMs,
-    PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter,
+    PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter, SHEET_READING_SOURCES,
     GROQ_PACER: pacer,
     fetch: async (url, options) => {
       sent.push(JSON.parse(options.body));
@@ -326,8 +342,8 @@ test("Everything that gives a character a voice keeps its own chain, Groq only a
   assert.equal(order("scene")[0], "openrouter-dm-venice");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "openrouter-dm-dolphin", source);
   assert.deepEqual(order("feed-post"), ["openrouter-dm-dolphin", "gemini", "openai"]);
-  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
-  assert.deepEqual(order("character-bible"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
+  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"]);
+  assert.deepEqual(order("character-bible"), ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"]);
   for (const source of ["group-chat", "notes", "autonomy-other", "scene-roleplay"]) assert.equal(order(source)[0], "gemini", source + " starts on Gemini");
 });
 
@@ -884,7 +900,7 @@ test("Final OpenRouter routing: the first slot runs Gemma 4 31B (free) on the fu
   assert.match(source, /const openRouter3Key = process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY;\n\s+let result = await proxyCompatibleMessage\("openrouter3", openRouter3Key/, "R78: Nemotron on the funded key 2");
   assert.match(source, /raw = \["openrouter-dm-venice", "mistral", "mistral2"\]/, "DM and scene: the paid OpenRouter route, Mistral 1, Mistral 2");
   assert.match(source, /provider === "openrouter-dm-dolphin"\n\s+\/\* R74[^\n]*\*\/\n\s+\? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ enabled: false, exclude: true \} \}/);
-  assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openai"\]/);
+  assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"\]/, "reading a sheet: Gemini, the other free models, the paid OpenRouter route, OpenAI last");
   assert.match(source, /raw = \["openrouter-dm-dolphin", "gemini", "openai"\]/, "comments and posts: Gemma, Gemini, OpenAI");
 });
 

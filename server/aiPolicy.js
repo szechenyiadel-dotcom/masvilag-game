@@ -30,6 +30,14 @@ export function isForegroundRequest(body) {
    as the very last one (the owner's rule). Not for popups and invitations (never paid), nor for the analysis and
    translation chores that run constantly and have free chains of their own. */
 export const PAID_LAST_RESORT_PROVIDERS = Object.freeze(["openai"]);
+/* Reading a whole character sheet matters more than what it costs: when Gemini and the free models cannot do it, the paid
+   OpenRouter route reads it (OpenRouter is the first paid provider), and OpenAI after that. */
+export const PAID_SHEET_READING_PROVIDERS = Object.freeze(["openrouter-dm-venice", "openai"]);
+export function paidBackgroundProviders(source, isUtility = false) {
+  const kind = String(source || "").trim().toLowerCase();
+  if (SHEET_READING_SOURCES.includes(kind)) return PAID_SHEET_READING_PROVIDERS;
+  return mayUsePaidLastResort(kind, isUtility) ? PAID_LAST_RESORT_PROVIDERS : [];
+}
 export function mayUsePaidLastResort(source, isUtility = false) {
   const kind = String(source || "").trim().toLowerCase();
   if (isUtility) return false;
@@ -532,7 +540,10 @@ export function paidMaxInputChars(env = {}) {
    the conversation and the relationship it answers. Everything else keeps the base ceiling. */
 export const PAID_PLAYER_FACING_SOURCES = Object.freeze(["dm", "scene"]);
 export function paidCeilingFor(source, base) {
-  return base > 0 && PAID_PLAYER_FACING_SOURCES.includes(String(source || "").trim().toLowerCase()) ? Math.floor(base * 1.5) : base;
+  const kind = String(source || "").trim().toLowerCase();
+  /* a whole-sheet reading is never cut to a ceiling: reading it A to Z is the point (0 = no ceiling) */
+  if (SHEET_READING_SOURCES.includes(kind)) return 0;
+  return base > 0 && PAID_PLAYER_FACING_SOURCES.includes(kind) ? Math.floor(base * 1.5) : base;
 }
 
 /* How much of each part of a prompt may stay when the whole must fit maxChars: the system part gets up to
