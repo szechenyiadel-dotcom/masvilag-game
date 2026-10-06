@@ -1881,13 +1881,14 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 /* ---------- shell: mobile first ---------- */
 .hush-shell { flex:1; min-height:0; display:flex; justify-content:center; width:100%; }
 .mv-wrap { max-width:640px; }
-.mv-main { padding:0 16px 120px; }
+.mv-main { padding:0 16px 28px; }
 .hush-side, .hush-rail { display:none; }
 .nav { display:none !important; }
 
 /* mobile: floating capsule tab bar + separate whisper-shaped "+" */
-.hush-tabbar { position:absolute; left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom)); z-index:30;
-  display:flex; align-items:center; gap:10px; pointer-events:none; }
+/* the bar is docked under the content (in the page flow), so nothing ever scrolls underneath it */
+.hush-tabbar { position:relative; flex:none; z-index:30; display:flex; align-items:center; gap:10px;
+  padding:8px 12px calc(8px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--card-line); }
 .hush-tabs { pointer-events:auto; flex:1; display:flex; gap:4px; padding:5px; border-radius:99px;
   background:rgba(9,18,13,.92); border:1px solid var(--card-line); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
   box-shadow:0 14px 34px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05); }
