@@ -3796,7 +3796,7 @@ const POSSESSIVE_CLAIM_RE = /\b(?:(?:she|he)(?:'s| is) mine|(?:what|who)(?:'s| i
 /* R99 (owner's rule): in a fake-dating pair the deal stays the deal — a line that pushes to make it real
    ("I'll win you over without the act", "wanna see where it goes?", "commit for real") is taken out, and a
    fuckboy / player type answers short (at most three sentences), not with a love monologue. */
-const FAKE_DATING_PUSH_RE = /without the act|make (?:it|this|us) real|for real\b|see where (?:it|this) goes|win you over|not (?:just )?(?:an? |the )?act\b|(?:it'?s|this is) not fake|not fake (?:for|to) me|real (?:girlfriend|boyfriend|thing|couple|relationship)|\bcommit\b|be mine|more than (?:an? |the )?act|i mean (?:it|every word)|not faking|who (?:the (?:fuck|hell) )?knows\?|play for keeps|igazából|komolyan gondolom|nem (?:csak )?(?:színjáték|kamu)|legyen igazi|vállald/i;
+const FAKE_DATING_PUSH_RE = /(?:feels?|felt|getting|gets) (?:way |a little |kind of |kinda |pretty )?(?:too )?real|too real\b|catching feelings for you|i(?:'m| am) falling for|without the act|make (?:it|this|us) real|for real\b|see where (?:it|this) goes|win you over|not (?:just )?(?:an? |the )?act\b|(?:it'?s|this is) not fake|not fake (?:for|to) me|real (?:girlfriend|boyfriend|thing|couple|relationship)|\bcommit\b|be mine|more than (?:an? |the )?act|i mean (?:it|every word)|not faking|who (?:the (?:fuck|hell) )?knows\?|play for keeps|igazából|komolyan gondolom|nem (?:csak )?(?:színjáték|kamu)|legyen igazi|vállald/i;
 function keepFakeDatingLane(w, speakerId, targetId, text) {
   const value = String(text || "").trim();
   if (!w || !speakerId || !targetId || !value) return value;
@@ -37857,8 +37857,36 @@ function directDmProtectedTail(w, c, ck, latestText) {
     clarification +
     emotionTrigger +
     fakeDatingLane +
+    directDmLastExchangeBlock(w, c, ck, latest) +
     "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
     latest;
+}
+
+/* R100: the small model mixed up who said what ("What did I say that made you think I was using you?" after the
+   PLAYER said "I'm not using you") — the last exchange is spelled out with the roles, in the world's language */
+function directDmLastExchangeBlock(w, c, ck, latest) {
+  try {
+    const msgs = ((w && w.chats && w.chats[ck]) || []).filter((m) => m && String(m.text || "").trim());
+    const latestText = String(latest || "").trim();
+    let lastPlayerIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].from === "me") { lastPlayerIdx = i; break; } }
+    const before = msgs.slice(0, lastPlayerIdx >= 0 ? lastPlayerIdx : msgs.length);
+    let mine = "";
+    for (let i = before.length - 1; i >= 0; i--) { if (before[i].from !== "me") { mine = String(before[i].text || "").trim(); break; } }
+    const player = (w && w.player && w.player.name) || "the player";
+    const me = (c && c.name) || "you";
+    const en = worldLanguage(w, w && w.meId) === "en";
+    const clip = (x) => String(x || "").replace(/\s+/g, " ").slice(0, 400);
+    return en
+      ? "THE LAST EXCHANGE — KEEP THE ROLES STRAIGHT:\n" +
+        (mine ? "- YOU (" + me + ") wrote before: «" + clip(mine) + "»\n" : "") +
+        "- " + player + " (the player, NOT you) has just written: «" + clip(latestText) + "»\n" +
+        "Write " + me + "'s answer to what " + player + " just wrote. What " + player + " says about themself is theirs (\"I'm not using you\" means " + player + " is not using you) — never answer as if you had said it. Short, like a real text, and it must make sense as a reply to that exact line.\n\n"
+      : "AZ UTOLSÓ VÁLTÁS — TARTSD A SZEREPEKET:\n" +
+        (mine ? "- TE (" + me + ") ezt írtad előtte: «" + clip(mine) + "»\n" : "") +
+        "- " + player + " (a játékos, NEM te) most ezt írta: «" + clip(latestText) + "»\n" +
+        me + " válaszát írd arra, amit " + player + " most írt. Amit " + player + " magáról mond, az az övé — soha ne válaszolj úgy, mintha te mondtad volna. Röviden, mint egy igazi üzenet, és pontosan erre a sorra legyen értelmes válasz.\n\n";
+  } catch (error) { return ""; }
 }
 
 function directDmPrebudgetPrompt(prompt, protectedTail) {
