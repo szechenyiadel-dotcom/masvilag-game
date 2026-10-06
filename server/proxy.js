@@ -5,6 +5,8 @@ import {
   filterProvidersForBody,
   mayUsePaidLastResort,
   PAID_LAST_RESORT_PROVIDERS,
+  paidBackgroundProviders,
+  SHEET_READING_SOURCES,
   providerTimeBudget,
   selectGeminiKeys,
   backgroundWaitSeconds,
@@ -5094,8 +5096,12 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
           : source === "feed-post"
           ? Math.min(baseTimeout, 25000)
           : Math.min(baseTimeout, 35000);
+  /* a whole-sheet reading takes as long as it takes: no short slice for the OpenRouter models that read it */
+  const readingASheet = SHEET_READING_SOURCES.includes(source);
   const providerTimeout =
-    provider === "openrouter3"
+    readingASheet && provider !== "groq" && provider !== "groq2"
+      ? baseTimeout
+      : provider === "openrouter3"
       ? openRouter3Timeout
       : provider === "openrouter" || provider === "openrouter2"
         ? Math.min(baseTimeout, 15000)
@@ -5723,8 +5729,9 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (isFeed) {
     raw = ["openrouter-dm-dolphin", "gemini", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
-    /* Canon/identity knowledge: Gemini -> Groq 1 -> Groq 2 (when it fits) -> Nemotron -> OpenAI. */
-    raw = ["gemini", "groq", "groq2", "openrouter3", "openai"];
+    /* Canon/identity knowledge (reading a whole character sheet is important): Gemini; if it cannot, the other free models
+       (Groq when the sheet fits it, Nemotron, Gemma); then the paid OpenRouter route; OpenAI as the very last one. */
+    raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"];
   } else if (isGroqUtilitySource(source)) {
     /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
@@ -5750,7 +5757,7 @@ function taskProviderOrder(requestedProvider, body) {
     ),
     body,
     /* OpenAI is the last resort for what the world writes on its own, once every free provider has failed */
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, paidAllowed: mayUsePaidLastResort(source, isGroqUtilitySource(source)) ? PAID_LAST_RESORT_PROVIDERS : [], allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, paidAllowed: paidBackgroundProviders(source, isGroqUtilitySource(source)), allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
   );
 }
 

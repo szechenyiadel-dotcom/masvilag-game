@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys, mayUsePaidLastResort, providerTimeBudget,
+  PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys, mayUsePaidLastResort, providerTimeBudget, paidCeilingFor,
   backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight, planGroqRequest, groqRetryMs, GROQ_FREE_TPM_BUDGET,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
   GROQ_UTILITY_SOURCES, GROQ_UTILITY_CHAIN, isGroqUtilitySource, estimateGroqTokens, groqCarriesWhole, groqPaceMaxWaitMs, createGroqPacer, GROQ_WINDOW_MS,
