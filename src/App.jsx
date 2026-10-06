@@ -2005,7 +2005,8 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
   .hush-compose-title-long { display:none; }
   .hush-compose-title-short { display:inline; }
   .hush-compose .hush-compose-post-bottom { display:none; }
-  .hush-compose .social-composer textarea.i { font-size:22px; min-height:140px; }
+  .hush-compose .social-composer textarea.i { font-size:22px; min-height:38vh; min-height:38dvh; }
+  .hush-compose .social-composer { flex:1 1 auto; display:flex; flex-direction:column; }
 }
 @media (min-width:760px) {
   .hush-compose-scrim { align-items:center; }
@@ -30769,6 +30770,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
   const [hl, setHl] = useState("");
   const [feedMode, setFeedMode] = useState("all");
   const [showMedia, setShowMedia] = useState(false);
+  const composeTextRef = useRef(null);
   const [profileId, setProfileId] = useState("");
   /* All posts stay in world state. Only mounted feed DOM is windowed. */
   const [visiblePostLimit, setVisiblePostLimit] = useState(60);
@@ -31295,7 +31297,17 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
 
       {composeOpen && !wallMode ? (
       <div className="hush-compose-scrim" onClick={(e) => { if (e.target === e.currentTarget && onComposeClose) onComposeClose(); }}>
-      <div className="hush-compose" role="dialog" aria-label={tt("Suttogj valamit", "Whisper something")}>
+      <div
+        className="hush-compose"
+        role="dialog"
+        aria-label={tt("Suttogj valamit", "Whisper something")}
+        onClick={(e) => {
+          /* phone: a tap anywhere on the empty writing area puts the cursor in the text box */
+          if (e.target.closest && e.target.closest("button, a, input, textarea, select, label, .social-media-panel, .mention-bar")) return;
+          const ta = composeTextRef.current;
+          if (ta && document.activeElement !== ta) { try { ta.focus(); } catch (error) { /* ignore */ } }
+        }}
+      >
         <div className="between hush-compose-head">
           <button type="button" className="btn tiny ghost hush-compose-x" onClick={() => onComposeClose && onComposeClose()} aria-label={tt("Bezárás", "Close")}><X size={16} /></button>
           <h2 className="hush-compose-title"><span className="hush-compose-title-long">{tt("Suttogj valamit", "Whisper something")}</span><span className="hush-compose-title-short">{tt("Új suttogás", "New whisper")}</span></h2>
@@ -31328,6 +31340,8 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           </button>
           <div style={{ flex: 1, minWidth: 0 }}>
             <textarea
+              ref={composeTextRef}
+              autoFocus
               className="i"
               value={text}
               placeholder={tt(
