@@ -1986,6 +1986,27 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .hush-compose .social-composer-actions { margin-left:0; border-top:1px solid var(--card-line); padding-top:14px; }
 .hush-compose .social-composer-actions .btn.primary { min-height:52px; padding:12px 26px; font-size:15px; }
 .hush-compose .social-media-panel { margin-left:0; }
+.hush-compose-x, .hush-compose-post, .hush-compose-title-short { display:none; }
+.hush-compose-head { gap:10px; }
+@media (max-width:759px) {
+  /* phone: a full-screen composer — close on the left, "Whisper it" on the top right (above the keyboard),
+     the image button right under the text instead of at the bottom of the screen */
+  .hush-compose-scrim { align-items:stretch; background:#050C08; backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .hush-compose { max-width:none; height:100%; max-height:none; border:0; border-radius:0; display:flex; flex-direction:column;
+    padding:0 16px calc(16px + env(safe-area-inset-bottom)); }
+  .hush-compose-head { position:sticky; top:0; z-index:2; margin:0 -16px 10px; padding:calc(10px + env(safe-area-inset-top)) 16px 10px;
+    background:rgba(5,12,8,.97); border-bottom:1px solid var(--card-line); flex-wrap:nowrap; }
+  .hush-compose-head .hush-compose-title { flex:1 1 auto; min-width:0; margin:0; font-size:26px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hush-compose-x { display:inline-flex; flex:none; min-width:44px; min-height:44px; justify-content:center; }
+  .hush-compose-x-desk { display:none; }
+  .hush-compose-post { display:inline-flex; flex:none; min-height:44px; padding:0 18px; font-size:14px; gap:6px; align-items:center; border-radius:99px; }
+  .hush-compose-post:disabled { opacity:.45; }
+  .hush-compose .social-composer-actions { border-top:0; padding-top:8px; justify-content:flex-start; margin-left:48px; }
+  .hush-compose-title-long { display:none; }
+  .hush-compose-title-short { display:inline; }
+  .hush-compose .hush-compose-post-bottom { display:none; }
+  .hush-compose .social-composer textarea.i { font-size:22px; min-height:140px; }
+}
 @media (min-width:760px) {
   .hush-compose-scrim { align-items:center; }
   .hush-compose { border-radius:var(--whisper); border-bottom:1px solid var(--card-line); max-height:88vh; }
@@ -31275,9 +31296,20 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
       {composeOpen && !wallMode ? (
       <div className="hush-compose-scrim" onClick={(e) => { if (e.target === e.currentTarget && onComposeClose) onComposeClose(); }}>
       <div className="hush-compose" role="dialog" aria-label={tt("Suttogj valamit", "Whisper something")}>
-        <div className="between">
-          <h2 className="hush-compose-title">{tt("Suttogj valamit", "Whisper something")}</h2>
-          <button type="button" className="btn tiny ghost" onClick={() => onComposeClose && onComposeClose()} aria-label={tt("Bezárás", "Close")}><X size={16} /></button>
+        <div className="between hush-compose-head">
+          <button type="button" className="btn tiny ghost hush-compose-x" onClick={() => onComposeClose && onComposeClose()} aria-label={tt("Bezárás", "Close")}><X size={16} /></button>
+          <h2 className="hush-compose-title"><span className="hush-compose-title-long">{tt("Suttogj valamit", "Whisper something")}</span><span className="hush-compose-title-short">{tt("Új suttogás", "New whisper")}</span></h2>
+          <button type="button" className="btn tiny ghost hush-compose-x-desk" onClick={() => onComposeClose && onComposeClose()} aria-label={tt("Bezárás", "Close")}><X size={16} /></button>
+          {/* phone: the post button sits up here, so the keyboard never covers it */}
+          <button
+            type="button"
+            className="btn primary hush-compose-post"
+            onClick={async () => { await post(); setShowMedia(false); }}
+            disabled={busy === "posting" || (!text.trim() && !img)}
+          >
+            {busy === "posting" ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+            {tt("Elsuttogom", "Whisper it")}
+          </button>
         </div>
       <div className="social-composer">
         <div className="social-composer-main">
@@ -31333,7 +31365,7 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           </button>
 
           <button
-            className="btn primary"
+            className="btn primary hush-compose-post-bottom"
             onClick={async () => {
               await post();
               setShowMedia(false);
