@@ -65,7 +65,7 @@ test("DM and scene: the paid OpenRouter route, Mistral 1, Mistral 2; comments an
     assert.deepEqual(order("scene", extra), ["openrouter-dm-venice", "mistral", "mistral2"], "scene " + JSON.stringify(extra));
   }
   /* Comments and posts, player-waiting or background: Gemma (free OpenRouter) -> every Gemini key -> paid OpenAI. */
-  const commentChain = ["openrouter-dm-dolphin", "gemini", "openai"];
+  const commentChain = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"];
   assert.deepEqual(order("comments"), commentChain);
   assert.deepEqual(order("comments", { foreground: true }), commentChain);
   assert.deepEqual(order("player-post-comments", { foreground: true }), commentChain);
@@ -78,7 +78,7 @@ test("DM and scene: the paid OpenRouter route, Mistral 1, Mistral 2; comments an
     const background = order(source);
     for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
   }
-  assert.deepEqual(order("feed-post"), ["openrouter-dm-dolphin", "gemini", "openai"]);
+  assert.deepEqual(order("feed-post"), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
   assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"]);
   assert.deepEqual(Array.from(FREE_WRITING_CHAIN), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
 });
@@ -101,10 +101,10 @@ test("Reading a whole sheet: when Gemini cannot, the free models try, then the p
 
 test("Feed goes Gemma, then every Gemini key, then OpenAI last", () => {
   const withFree = gate(ENV, () => ok("x"));
-  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["openrouter-dm-dolphin", "gemini", "openai"]);
+  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
   const paidGeminiOnly = gate({ ...ENV, GEMINI_API_KEY_2: "" }, () => ok("x"));
-  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter-dm-dolphin", "openai"], "no free Gemini key: Gemini is left out of background work");
-  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post", { foreground: true }).body)), ["openrouter-dm-dolphin", "gemini", "openai"]);
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter-dm-dolphin", "groq", "groq2", "openai"], "no free Gemini key: Gemini is left out of background work");
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post", { foreground: true }).body)), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
 });
 
 test("Background request with every provider rate-limited WAITS: a 503 with Retry-After; OpenAI was the last one tried, Mistral never", async () => {
@@ -115,7 +115,7 @@ test("Background request with every provider rate-limited WAITS: a 503 with Retr
   assert.equal(result.waiting, true);
   assert.ok(Number(result.retryAfter) >= 20, "waits at least 20 s, got " + result.retryAfter);
   assert.equal(result.payload.error.type, "free_ai_waiting");
-  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "gemini", "openai"]);
+  assert.deepEqual(Array.from(calls), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
   assert.ok(!calls.includes("anthropic") && !calls.includes("mistral") && !calls.includes("mistral2"), "billed providers called: " + calls);
 });
 
@@ -123,8 +123,8 @@ test("The providers of one background request share the app's timeout, so the ch
   const seen = [];
   const { context } = gate(ENV, (provider, body) => { seen.push([provider, body.timeout_ms]); return quota(provider); });
   await context.executeAITask(task(context, "feed-post", { timeout_ms: 38000 }));
-  assert.deepEqual(seen.map(([provider]) => provider), ["openrouter-dm-dolphin", "gemini", "openai"]);
-  assert.ok(Math.abs(seen[0][1] - 17100) <= 100, "the first of three may take less than half (a few ms of the real clock have passed): " + seen[0][1]);
+  assert.deepEqual(seen.map(([provider]) => provider), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
+  assert.ok(Math.abs(seen[0][1] - 17100) <= 100, "the first of five may take less than half (a few ms of the real clock have passed): " + seen[0][1]);
   for (const [provider, ms] of seen) assert.ok(ms >= 12000 && ms <= 38000, provider + " " + ms);
   assert.ok(seen[seen.length - 1][1] >= 12000, "the last one still has the floor");
   assert.ok(seen[1][0] === "gemini" && seen[1][1] > 20000 && seen[1][1] <= 38000, "Gemini, the one that really writes, is not held to the short slice of the free models: " + seen[1][1]);
@@ -235,7 +235,7 @@ test("A player waiting on a DM starts on the paid OpenRouter route, then Mistral
 
 test("AI_ALLOW_PAID_BACKGROUND=1 is the only way background work reaches paid providers", () => {
   const { context } = gate({ ...ENV, AI_ALLOW_PAID_BACKGROUND: "1" }, () => ok("x"));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["openrouter-dm-dolphin", "gemini", "openai"]);
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", task(context, "feed-post").body)), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
 });
 
 test("Gemini quota, credit and key errors never rest or switch off the whole provider: the ledger rests the exact pair", () => {
@@ -341,7 +341,7 @@ test("Everything that gives a character a voice keeps its own chain, Groq only a
   assert.equal(order("dm", { foreground: true })[1], "mistral");
   assert.equal(order("scene")[0], "openrouter-dm-venice");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "openrouter-dm-dolphin", source);
-  assert.deepEqual(order("feed-post"), ["openrouter-dm-dolphin", "gemini", "openai"]);
+  assert.deepEqual(order("feed-post"), ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"]);
   assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"]);
   assert.deepEqual(order("character-bible"), ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"]);
   for (const source of ["group-chat", "notes", "autonomy-other", "scene-roleplay"]) assert.equal(order(source)[0], "gemini", source + " starts on Gemini");
@@ -901,7 +901,7 @@ test("Final OpenRouter routing: the first slot runs Gemma 4 31B (free) on the fu
   assert.match(source, /raw = \["openrouter-dm-venice", "mistral", "mistral2"\]/, "DM and scene: the paid OpenRouter route, Mistral 1, Mistral 2");
   assert.match(source, /provider === "openrouter-dm-dolphin"\n\s+\/\* R74[^\n]*\*\/\n\s+\? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ enabled: false, exclude: true \} \}/);
   assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"\]/, "reading a sheet: Gemini, the other free models, the paid OpenRouter route, OpenAI last");
-  assert.match(source, /raw = \["openrouter-dm-dolphin", "gemini", "openai"\]/, "comments and posts: Gemma, Gemini, OpenAI");
+  assert.match(source, /raw = \["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"\]/, "comments and posts: Gemma, Gemini, Groq, OpenAI last");
 });
 
 test("Comments use the free Gemini keys only, even when the player is waiting; a DM may still reach the paid key", async () => {
