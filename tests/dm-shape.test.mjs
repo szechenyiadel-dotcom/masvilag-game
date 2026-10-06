@@ -90,3 +90,14 @@ test("R96: a scene answer with its lines under another key keeps them", () => {
   assert.deepEqual(n(summary), summary, "a scene-closing summary is untouched");
   assert.match(source, /reportClientDiag\("scene-stuck"/);
 });
+
+test("R98: a 'you did not follow back' DM never says the player followed the character", () => {
+  const ctx = vm.createContext({ String });
+  vm.runInContext(pick(["fixFollowDirection"]), ctx);
+  const f = (t) => ctx.fixFollowDirection("follow-not-returned", t);
+  assert.equal(f("Tandy, you followed me, but you didn't follow back."), "Tandy, I followed you, but you didn't follow back.");
+  assert.equal(f("Bekövettél, de nem követtél vissza."), "Bekövettelek, de nem követtél vissza.");
+  assert.equal(ctx.fixFollowDirection("player-unfollowed", "you followed me once"), "you followed me once");
+  assert.match(source, /YOU followed " \+ player/);
+  assert.match(source, /fixFollowDirection\(dmTriggerNow, stripSocialRoleplayNarration/);
+});
