@@ -1989,24 +1989,20 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .hush-compose-x, .hush-compose-post, .hush-compose-title-short { display:none; }
 .hush-compose-head { gap:10px; }
 @media (max-width:759px) {
-  /* phone: a full-screen composer — close on the left, "Whisper it" on the top right (above the keyboard),
-     the image button right under the text instead of at the bottom of the screen */
-  .hush-compose-scrim { align-items:stretch; background:#050C08; backdrop-filter:none; -webkit-backdrop-filter:none; }
-  .hush-compose { max-width:none; height:100%; max-height:none; border:0; border-radius:0; display:flex; flex-direction:column;
-    padding:0 16px calc(16px + env(safe-area-inset-bottom)); }
-  .hush-compose-head { position:sticky; top:0; z-index:2; margin:0 -16px 10px; padding:calc(10px + env(safe-area-inset-top)) 16px 10px;
-    background:rgba(5,12,8,.97); border-bottom:1px solid var(--card-line); flex-wrap:nowrap; }
+  /* phone: the same bottom sheet as before (writing works the usual way), but "Whisper it" sits in the sheet's
+     top row next to the text, so the keyboard never hides it; close on the left */
+  .hush-compose { padding:14px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .hush-compose-head { margin:0 0 10px; flex-wrap:nowrap; align-items:center; }
   .hush-compose-head .hush-compose-title { flex:1 1 auto; min-width:0; margin:0; font-size:26px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .hush-compose-x { display:inline-flex; flex:none; min-width:44px; min-height:44px; justify-content:center; }
   .hush-compose-x-desk { display:none; }
   .hush-compose-post { display:inline-flex; flex:none; min-height:44px; padding:0 18px; font-size:14px; gap:6px; align-items:center; border-radius:99px; }
   .hush-compose-post:disabled { opacity:.45; }
   .hush-compose .social-composer-actions { border-top:0; padding-top:8px; justify-content:flex-start; margin-left:48px; }
+  .hush-compose .hush-compose-post-bottom { display:none; }
+  .hush-compose .social-composer textarea.i { font-size:22px; min-height:120px; }
   .hush-compose-title-long { display:none; }
   .hush-compose-title-short { display:inline; }
-  .hush-compose .hush-compose-post-bottom { display:none; }
-  .hush-compose .social-composer textarea.i { font-size:22px; min-height:38vh; min-height:38dvh; }
-  .hush-compose .social-composer { flex:1 1 auto; display:flex; flex-direction:column; }
 }
 @media (min-width:760px) {
   .hush-compose-scrim { align-items:center; }
@@ -31341,7 +31337,6 @@ function Feed({ w, update, setErr, jump, onOpenChat, onOpenWorlds, autoOn, onReq
           <div style={{ flex: 1, minWidth: 0 }}>
             <textarea
               ref={composeTextRef}
-              autoFocus
               className="i"
               value={text}
               placeholder={tt(
