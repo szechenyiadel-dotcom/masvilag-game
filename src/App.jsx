@@ -37671,6 +37671,12 @@ function normalizeDmRoleplayBridge(w, bot, raw, playerText, replyText) {
 
 const DM_MEET_PROPOSAL_RE = /\b(?:wanna|want to|let'?s|lets|come|meet|hang ?out|pick (?:you|u) up|come over|swing by|see (?:you|u)|link up|pull up)\b[^.!?]{0,40}\b(?:meet|hang|come|over|up|out|there|place|tonight|now|later)\b|\bwanna meet\b|\bmeet (?:me|you|up)\b|(?:tal[aá]lkozzunk|gyere (?:[aá]t|ide|el)|[aá]tj[oö]ssz|[aá]tmegyek|felveszlek|l[oó]gjunk|tal[aá]lkozunk)/i;
 const DM_MEET_COMMIT_RE = /\b(?:now|right now|be there|on my way|omw|meet (?:you|u) there|see (?:you|u) (?:there|soon|in)|in (?:five|5|ten|10|a few)(?: ?min(?:ute)?s?)?|coming|heading (?:over|out|there)|i'?m (?:coming|leaving|here|outside)|hurry|leaving now)\b|(?:indulok|[uú]ton vagyok|ott leszek|mindj[aá]rt ott|megyek|j[oö]v[oö]k|sietek|most\b)/i;
+/* A meetup settled in few words: someone names a place or a time ("meet me at the dock in an hour", "come to my place
+   tonight") and the other says yes in as little as "Fine. One hour." / "ok, 8" / "deal". The commit words above alone
+   missed all of that, and no Event invitation followed. */
+const DM_MEET_PLACE_PROPOSAL_RE = /\b(?:come|get|be|show up|pull up|swing by|head|go|meet(?: me| you| up)?|see (?:you|u)|find me|wait for me)\s+(?:to|at|in|on|by|near|outside|downstairs|over to|down to)\s+(?:my|the|our|your|his|her|a|an|this|that)\b|\bmy (?:place|room|apartment|flat|ship|deck|dojo|gym|house|car)\b[^.!?]{0,30}\b(?:tonight|now|later|tomorrow|at|in)\b|(?:gyere|j[oö]jj|tal[aá]lkozzunk|megv[aá]rlak|v[aá]rlak)\b[^.!?]{0,30}(?:hozz[aá]m|n[aá]lam|ott|itt|[aá]ra|este|ma|holnap)/i;
+const DM_MEET_TIME_RE = /\b(?:in|within|after)\s+(?:an?|one|two|three|four|five|ten|fifteen|twenty|thirty|\d+|a few|a couple of)\s*(?:hours?|hrs?|mins?|minutes?)\b|\bat\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:one|an) hour\b|\b(?:tonight|tomorrow|later today|this evening|this afternoon|noon|midnight|o'?clock)\b|(?:\bholnap\b|\bma este\b|\bdélben\b|\b\d{1,2}\s*(?:órakor|óra)\b|\begy óra\b|\b(?:perc|óra)\s*múlva\b)/i;
+const DM_MEET_ACCEPT_RE = /\b(?:fine|ok(?:ay)?|sure|deal|alright|all right|sounds good|works for me|bet|yes|yeah|yep|i'?ll be there|be there|i'?ll come|on time|see (?:you|u)(?: then| there)?|on my way|omw|don'?t be late|count me in|i'?m in)\b|(?:rendben|persze|megegyezt[uü]nk|ott leszek|ott vagyok|j[oö]v[oö]k|megyek|benne vagyok|[aá]ll az alku|[uú]gy lesz)/i;
 
 function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
   if (!w || !bot || !ck) return null;
@@ -37686,7 +37692,13 @@ function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
   const proposal = mine.concat(theirs).some((x) => DM_MEET_PROPOSAL_RE.test(x));
   const playerCommits = mine.slice(-6).some((x) => DM_MEET_COMMIT_RE.test(x));
   const botCommits = theirs.slice(-6).some((x) => DM_MEET_COMMIT_RE.test(x));
-  if (!proposal || !(playerCommits && botCommits)) return null;
+  /* settled in few words: a place or a time was named, and the answer in hand (or the one before it) says yes */
+  const placeOrTimeProposed = mine.concat(theirs).slice(-10).some((x) => DM_MEET_PROPOSAL_RE.test(x) || DM_MEET_PLACE_PROPOSAL_RE.test(x));
+  const timeNamed = mine.concat(theirs).slice(-10).some((x) => DM_MEET_TIME_RE.test(x));
+  const botSaysYes = theirs.slice(-2).some((x) => DM_MEET_ACCEPT_RE.test(x));
+  const playerSide = mine.slice(-4).some((x) => DM_MEET_PROPOSAL_RE.test(x) || DM_MEET_PLACE_PROPOSAL_RE.test(x) || DM_MEET_TIME_RE.test(x) || DM_MEET_COMMIT_RE.test(x));
+  const settledInFewWords = placeOrTimeProposed && timeNamed && botSaysYes && playerSide;
+  if (!(proposal && playerCommits && botCommits) && !settledInFewWords) return null;
   const en = worldLanguage(w, w.meId) === "en";
   const player = (w.player && w.player.name) || nameOfIn(w, w.meId);
   const transcript = rows.slice(-6).map((m) => (m && m.from === "me" ? player : bot.name) + ": " + String(m && m.text || "").slice(0, 140)).concat([player + ": " + String(playerText || "").slice(0, 140), bot.name + ": " + String(replyText || "").slice(0, 140)]).join(" / ");
@@ -38666,6 +38678,7 @@ ${dmRoleplayMode(t)
 CHAT ↔ ROLEPLAY BRIDGE — CSAK VALÓDI FIZIKAI TERVNÉL:
 - Ha ebben a DM-ben KONKRÉTAN megegyeztek egy személyes találkozóban/programban, vagy a játékos azt írja, hogy "come here / come over / meet me at... / come to..." és te ténylegesen elfogadod, a roleplayBridge.activate legyen true.
 - Ugyanez igaz, ha te most konkrétan megszervezel egy bulit, edzést, találkozót vagy más Eventet, és ez már tényleges terv, nem hipotetikus ötlet.
+- A MEGEGYEZÉS RÖVIDEN IS MEGEGYEZÉS: ha a játékos helyet vagy időpontot mondott ("meet me at the dock in an hour", "come to my place tonight", "8-kor nálam"), és te EBBEN a válaszodban elfogadod ("fine", "ok", "deal", "one hour", "be there", "persze", "megyek"), akkor a terv kész: activate=true, a setting a megbeszélt hely és idő, az opening az első fizikai pillanat. Ne hagyd activate=false-on csak azért, mert a válaszod rövid vagy mogorva.
 - Ha csak beszéltek róla, bizonytalan, elutasítod, későbbre lebegtetitek vagy nincs konkrét fizikai találkozás, activate=false.
 - private_meet / arrival: CSAK te legyél AI-cast; a játékos automatikusan jelen van. Ne rakj be random harmadik embert.
 - HARD AUDIENCE RULE: ha a meghívás nyelvtanilag és tartalmilag kettőtökről szól ("you and me", randi, kávé, séta, privát beszélgetés, gyere át, találkozz velem, kettes edzés, négyszemközti konfrontáció), kind=private_meet vagy arrival legyen, és cast=["${c.id}"]. Attól, hogy a helyszín dojo/iskola/bulihely vagy a mondat említi a training/party szót, még NEM válik csoportossá.
