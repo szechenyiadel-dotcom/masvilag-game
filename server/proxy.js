@@ -5724,10 +5724,12 @@ function taskProviderOrder(requestedProvider, body) {
     /* Scenes (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2. */
     raw = ["openrouter-dm-venice", "mistral", "mistral2"];
   } else if (isComment) {
-    /* Comments and posts (the owner's rule): Gemma (OpenRouter, free) -> every Gemini key and model -> paid OpenAI. */
-    raw = ["openrouter-dm-dolphin", "gemini", "openai"];
+    /* Comments and posts (the owner's rule): Gemma (OpenRouter, free) -> every Gemini key and model -> paid OpenAI last.
+       Groq 1 and 2 (free) sit before OpenAI as a safety net: with the free Gemma answering 429 and Gemini overloaded, a
+       chain that ended on an OpenAI key out of credit left every comment and every post unwritten. */
+    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"];
   } else if (isFeed) {
-    raw = ["openrouter-dm-dolphin", "gemini", "openai"];
+    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Canon/identity knowledge (reading a whole character sheet is important): Gemini; if it cannot, the other free models
        (Groq when the sheet fits it, Nemotron, Gemma); then the paid OpenRouter route; OpenAI as the very last one. */
