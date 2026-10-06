@@ -9015,6 +9015,12 @@ async function requestAiProxy(payload, signal) {
   throw lastErr || new Error("AI proxy unavailable");
 }
 
+/* A DM reply and a scene turn run on mid-size models (a 24B-class one among them): at 0.9 they ramble and lose the thread of
+   the conversation they answer, so those two are written a little cooler. Everything else keeps its liveliness. */
+function aiWritingTemperature(source) {
+  return /^(dm|scene)$/.test(String(source || "").trim().toLowerCase()) ? 0.75 : 0.9;
+}
+
 async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   /* MÁSVILÁG GROUP CHAT PRE-BUDGET CAP v1 */
   const preBudgetSource = typeof inferAiRequestSource === "function"
@@ -9068,7 +9074,7 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
   provider: DEFAULT_AI_PROVIDER,
   model: DEFAULT_AI_MODEL,
   max_tokens: maxTokens,
-  temperature: requestMeta && requestMeta.quality === "deep" ? 0.3 : 0.9,
+  temperature: requestMeta && requestMeta.quality === "deep" ? 0.3 : aiWritingTemperature(requestMeta && requestMeta.source),
   quality: requestMeta && requestMeta.quality === "deep" ? "deep" : undefined,
   source: String(requestMeta && requestMeta.source || "client-ai"),
   /* Only a call the player is waiting on may use paid capacity; the server treats everything else as background. */

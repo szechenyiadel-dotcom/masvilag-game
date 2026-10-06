@@ -54,3 +54,15 @@ test("Both go into the protected tail of every DM reply, right before the player
   assert.match(source, /directDmLastExchangeBlock\(w, c, ck, latest\) \+\n    directDmFeelingBlock\(w, c\) \+\n    DIRECT_DM_EMOTION_RULES \+\n    "AMIRE MOST VÁLASZOLNOD KELL/);
   assert.match(source, /options && options\.source === "dm"\n\s+\? "PERFORMANCE: no text outside the requested JSON/);
 });
+
+test("A DM reply and a scene turn are written at 0.75, the rest at 0.9, a careful reading at 0.3", () => {
+  const context = vm.createContext({ String });
+  vm.runInContext(pick(["aiWritingTemperature"]), context);
+  assert.equal(context.aiWritingTemperature("dm"), 0.75);
+  assert.equal(context.aiWritingTemperature("scene"), 0.75);
+  assert.equal(context.aiWritingTemperature(" Scene "), 0.75);
+  assert.equal(context.aiWritingTemperature("comments"), 0.9);
+  assert.equal(context.aiWritingTemperature("feed-post"), 0.9);
+  assert.equal(context.aiWritingTemperature(undefined), 0.9);
+  assert.match(source, /temperature: requestMeta && requestMeta\.quality === "deep" \? 0\.3 : aiWritingTemperature\(requestMeta && requestMeta\.source\)/);
+});
