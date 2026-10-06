@@ -133,3 +133,15 @@ test("R100: the DM prompt spells out who said what in the last exchange; 'feels 
   assert.ok(PUSH.test("Because, newsflash, Bowen, for a fake relationship, it feels way too real at times."));
   assert.ok(!PUSH.test("You're playing with fire, and I enjoy the burn."));
 });
+
+test("R102: the sheet's own personality / key traits / speech style lead every speaker card, verbatim", () => {
+  const ctx = vm.createContext({ String, Math, Number });
+  vm.runInContext(pick(["characterCoreSheet"]), ctx);
+  const card = ctx.characterCoreSheet({ name: "Ian Sestero", personality: "Calm, strictly professional sensei, protective big-brother energy, never flirts with students.", traits: "Patient, dry humour", speech: "Short, formal, no slang" }, 1500);
+  assert.match(card, /^CORE OF IAN SESTERO/);
+  assert.match(card, /PERSONALITY: Calm, strictly professional sensei/);
+  assert.match(card, /KEY TRAITS: Patient, dry humour/);
+  assert.match(card, /SPEECH STYLE: Short, formal, no slang/);
+  assert.match(card, /FULL strength/);
+  assert.match(source, /return \[personaBlock, owner, extreme, style, bible\]/);
+});

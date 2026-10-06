@@ -56,7 +56,7 @@ test("Hungarian sheets and the character bible count too; ordinary people get no
 });
 
 test("The order sits on every speaker card and in the global policy of every AI request", () => {
-  assert.match(source, /try \{ extreme = \[extremeNatureDirective\(w, c\), playerTypeDirective\(w, c\)\]\.filter\(Boolean\)\.join\("\\n"\); \} catch \(error\) \{ extreme = ""; \}\n      return \[owner, extreme, style, personaBlock, bible\]/);
+  assert.match(source, /try \{ extreme = \[extremeNatureDirective\(w, c\), playerTypeDirective\(w, c\)\]\.filter\(Boolean\)\.join\("\\n"\); \} catch \(error\) \{ extreme = ""; \}\n      return \[personaBlock, owner, extreme, style, bible\]/);
   assert.match(policy, /EXTREME PERSONALITIES — HARD CONTRACT/);
   assert.match(policy, /does NOT dilute these characters/);
   assert.match(policy, /\$\{ACTIVE_LANGUAGE_POLICY\}\\n\$\{EXTREME_PERSONALITY_POLICY\}/);

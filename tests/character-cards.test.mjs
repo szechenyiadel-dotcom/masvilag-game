@@ -20,7 +20,7 @@ function harness(people, bibles) {
     isHuman: (w, id) => id === "me",
     worldLanguage: () => "en",
     identityCanonLine: (w, c) => "PUBLIC " + c.name,
-    characterPersonaBrief: () => "persona ".repeat(300),
+    characterPersonaBrief: () => "persona ".repeat(300), characterCoreSheet: () => "",
     characterVoiceStyleCard: () => "voice ".repeat(500),
     characterNicknameLines: () => "",
   });

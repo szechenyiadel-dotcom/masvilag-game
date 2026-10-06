@@ -3825,7 +3825,11 @@ function keepFakeDatingLane(w, speakerId, targetId, text) {
 function stripUnfoundedPossessiveClaims(w, speakerId, text) {
   const value = String(text || "");
   const straight = (x) => String(x || "").replace(/[’‘]/g, "'");
-  if (!w || !speakerId || !value || isHuman(w, speakerId) || !POSSESSIVE_CLAIM_RE.test(straight(value))) return value;
+  /* R102: "<Name>'s mine" / "you're mine" are mine-claims too */
+  const firstNames = [w && w.player && w.player.name, ...(((w && w.chars) || []).map((c) => c && c.name))].map((n) => String(n || "").trim().split(/\s+/)[0]).filter((n) => n && n.length >= 3).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const namedMineRe = firstNames.length ? new RegExp("\\b(?:you(?:'re| are)|" + firstNames.join("|") + ")(?:'s| is)? mine\\b", "i") : /\byou(?:'re| are) mine\b/i;
+  const isMineClaim = (x) => POSSESSIVE_CLAIM_RE.test(straight(x)) || namedMineRe.test(straight(x));
+  if (!w || !speakerId || !value || isHuman(w, speakerId) || !isMineClaim(value)) return value;
   const candidates = [w.meId, ...((w.chars || []).map((c) => c && c.id))].filter((id) => id && id !== speakerId);
   const entitled = candidates.some((id) => {
     let stake = null;
@@ -3836,7 +3840,7 @@ function stripUnfoundedPossessiveClaims(w, speakerId, text) {
   let playerType = false;
   try { playerType = Boolean(playerTypeDirective(w, charById(w, speakerId))); } catch (error) { playerType = false; }
   if (entitled && !playerType) return value;
-  const kept = value.split(/(?<=[.!?…])\s+/).filter((part) => !POSSESSIVE_CLAIM_RE.test(straight(part))).join(" ").trim();
+  const kept = value.split(/(?<=[.!?…])\s+/).filter((part) => !isMineClaim(part)).join(" ").trim();
   console.info("[possessive] removed a 'mine' claim from someone who is not with / possessive about anyone", "speaker=" + speakerId, value.slice(0, 120));
   return kept;
 }
@@ -63008,6 +63012,24 @@ function characterPersonaBrief(c) {
   return raw.replace(/\s+\n/g, "\n").slice(0, 1100);
 }
 
+/* R102 (owner's rule): the sheet's own Personality, Key traits and Speech style DOMINATE how a character writes,
+   played to the full — verbatim from the sheet, never a shortened AI summary of it */
+function characterCoreSheet(c, budget = 3200) {
+  if (!c) return "";
+  const clip = (v, n) => { const t = String(v || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n).replace(/\s+\S*$/, "") + "…" : t; };
+  const total = Math.max(600, Number(budget) || 3200);
+  const parts = [
+    ["PERSONALITY", c.personality, Math.round(total * 0.5)],
+    ["KEY TRAITS", c.traits, Math.round(total * 0.25)],
+    ["SPEECH STYLE", c.speech, Math.round(total * 0.25)],
+  ].filter(([, v]) => String(v || "").trim());
+  if (!parts.length) return "";
+  const name = String(c.name || "").toUpperCase();
+  return "CORE OF " + name + " — THE OWNER WROTE THIS; IT DOMINATES EVERYTHING ELSE ABOUT HOW " + name + " WRITES:\n" +
+    parts.map(([k, v, n]) => k + ": " + clip(v, n)).join("\n") + "\n" +
+    "Play it EXACTLY and at FULL strength — every line must be recognisably this personality and this way of talking. Never soften it, never turn " + name + " into a generic nice / flirty / possessive type, never give " + name + " another speaker's attitude. Relationship moods and other cards only add detail; they never change who " + name + " is.";
+}
+
 function characterVoiceStyleCard(c) {
   const card = extractCharacterVoiceStyleCard(c);
   return card && card.card ? String(card.card).slice(0, 2600) : "";
@@ -63032,9 +63054,11 @@ function voiceCard(c) {
     summary = String(contextSummary && contextSummary.private || "").slice(0, 2800);
   } catch {}
   const persona = characterPersonaBrief(c);
+  const core = characterCoreSheet(c, 3600);
   return [
+    core,
     style,
-    persona ? "PERSONALITY — FROM THE OWN SHEET, PLAY EXACTLY THIS:\n" + persona : "",
+    !core && persona ? "PERSONALITY — FROM THE OWN SHEET, PLAY EXACTLY THIS:\n" + persona : "",
     strict,
     summary
       ? "COMPACT SELF-CANON — RELEVANT PORTRAYAL CONTEXT; DO NOT LEAK PRIVATE FACTS AS OTHER CHARACTERS' KNOWLEDGE:\n" + summary
@@ -63173,7 +63197,9 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       const persona = characterPersonaBrief(c);
       const rawStyle = characterVoiceStyleCard(c);
       const style = rawStyle.slice(0, speakers.length > 4 ? 1200 : (speakers.length > 2 ? 1600 : 2200));
-      const personaBlock = persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : (speakers.length > 2 ? 800 : 1200)) : "";
+      /* R102: the sheet's own personality / key traits / speech style first and verbatim; the AI summary only fills in when the sheet has none */
+      const core = characterCoreSheet(c, speakers.length > 4 ? 1500 : (speakers.length > 2 ? 2200 : 3200));
+      const personaBlock = core || (persona ? "PERSONALITY OF " + String(c.name || "").toUpperCase() + " — FROM THEIR OWN SHEET, PLAY EXACTLY THIS (not a generic type, not the original fandom):\n" + persona.slice(0, speakers.length > 4 ? 600 : (speakers.length > 2 ? 800 : 1200)) : "");
       const room = Math.max(500, perSpeaker - style.length - personaBlock.length - 10);
       let bible = "";
       try { bible = characterBibleCard(w, c, room); } catch (error) { bible = ""; }
@@ -63181,7 +63207,7 @@ function voiceStyleCardsForIds(w, ids, actorId) {
       /* R75 */
       let extreme = "";
       try { extreme = [extremeNatureDirective(w, c), playerTypeDirective(w, c)].filter(Boolean).join("\n"); } catch (error) { extreme = ""; }
-      return [owner, extreme, style, personaBlock, bible].filter(Boolean).join("\n");
+      return [personaBlock, owner, extreme, style, bible].filter(Boolean).join("\n");
     })
     .filter(Boolean);
 
