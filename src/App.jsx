@@ -3796,17 +3796,22 @@ const POSSESSIVE_CLAIM_RE = /\b(?:(?:she|he)(?:'s| is) mine|(?:what|who)(?:'s| i
 /* R99 (owner's rule): in a fake-dating pair the deal stays the deal — a line that pushes to make it real
    ("I'll win you over without the act", "wanna see where it goes?", "commit for real") is taken out, and a
    fuckboy / player type answers short (at most three sentences), not with a love monologue. */
-const FAKE_DATING_PUSH_RE = /(?:feels?|felt|getting|gets) (?:way |a little |kind of |kinda |pretty )?(?:too )?real|too real\b|catching feelings for you|i(?:'m| am) falling for|without the act|make (?:it|this|us) real|for real\b|see where (?:it|this) goes|win you over|not (?:just )?(?:an? |the )?act\b|(?:it'?s|this is) not fake|not fake (?:for|to) me|real (?:girlfriend|boyfriend|thing|couple|relationship)|\bcommit\b|be mine|more than (?:an? |the )?act|i mean (?:it|every word)|not faking|who (?:the (?:fuck|hell) )?knows\?|play for keeps|igazából|komolyan gondolom|nem (?:csak )?(?:színjáték|kamu)|legyen igazi|vállald/i;
+const FAKE_DATING_PUSH_RE = /(?:feels?|felt|getting|gets) (?:way |a little |kind of |kinda |pretty )?(?:too )?real|too real\b|catch(?:ing)? feelings|feelings (?:are |were )?(?:catching up|growing|real)|line between (?:fake|real|pretend)|(?:fake|pretend\w*|act) and real|real and fake|something more\b|i(?:'m| am) falling for|without the act|make (?:it|this|us) real|for real\b|see where (?:it|this) goes|win you over|not (?:just )?(?:an? |the )?act\b|(?:it'?s|this is) not fake|not fake (?:for|to) me|real (?:girlfriend|boyfriend|thing|couple|relationship)|\bcommit\b|be mine|more than (?:an? |the )?act|i mean (?:it|every word)|not faking|who (?:the (?:fuck|hell) )?knows\?|play for keeps|igazából|komolyan gondolom|nem (?:csak )?(?:színjáték|kamu)|legyen igazi|vállald/i;
+const PLAYER_CONFESSION_RE = /too real\b|catch(?:ing)? feelings|feelings (?:are |were )?(?:catching up|growing|real)|falling for (?:you|her|him)|\bi love you\b|see where (?:it|this) goes|something more\b|be mine\b|more than (?:a |just )?(?:fling|hookup|game)|line between (?:fake|real)|beleszerettem|szerelmes vagyok beléd/i;
 function keepFakeDatingLane(w, speakerId, targetId, text) {
   const value = String(text || "").trim();
   if (!w || !speakerId || !targetId || !value) return value;
   let card = "";
   try { card = fakeDatingBehaviorCard(w, speakerId, targetId); } catch (error) { card = ""; }
-  if (!card) return value;
+  /* R101: a player / fuckboy type does not pour out feelings to anyone, fake deal or not */
+  let playerType = false;
+  try { playerType = isPlayerType(w, charById(w, speakerId)); } catch (error) { playerType = false; }
+  if (!card && !playerType) return value;
+  const pushRe = card ? FAKE_DATING_PUSH_RE : PLAYER_CONFESSION_RE;
   const parts = value.split(/(?<=[.!?…])\s+/).filter(Boolean);
-  let kept = parts.filter((part) => !FAKE_DATING_PUSH_RE.test(part));
+  let kept = parts.filter((part) => !pushRe.test(part));
   let guarded = false;
-  try { guarded = Boolean(playerTypeDirective(w, charById(w, speakerId))) || /admitting real feelings is the LAST thing|az érzéseid bevallása az utolsó/.test(card); } catch (error) { guarded = false; }
+  try { guarded = playerType || /admitting real feelings is the LAST thing|az érzéseid bevallása az utolsó/.test(card); } catch (error) { guarded = false; }
   if (guarded && kept.length > 3) kept = kept.slice(0, 3);
   if (!kept.length) {
     const en = worldLanguage(w, w && w.meId) === "en";
@@ -50502,7 +50507,7 @@ function scheduleRomanticObserverReaction(w, event, observerId, subjectId, row =
       const where = event.type === "comment" || event.type === "reply" ? (en ? "in a public comment" : "egy nyilvános kommentben") : event.type === "post" ? (en ? "in a public post" : "egy nyilvános posztban") : (en ? "publicly" : "nyilvánosan");
       const said = cut(String(event.text || "").replace(/\s+/g, " "), 200);
       const observer = charById(w, observerId) || {};
-      const guarded = /fuck ?boy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|egyéjszakás|nem randizik|womani[sz]er|heartbreaker|commitment|emotionally unavailable|no strings|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz/i.test([observer.personality, observer.traits, observer.extra].filter(Boolean).join(" "));
+      const guarded = (typeof isPlayerType === "function" && isPlayerType(w, observer)) || /fuck ?boy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|egyéjszakás|nem randizik|womani[sz]er|heartbreaker|commitment|emotionally unavailable|no strings|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz/i.test([observer.personality, observer.traits, observer.extra].filter(Boolean).join(" "));
       causeText = (en
         ? "You saw " + player + " " + where + (others.length ? " with " + others.join(", ") : "") + (said ? ": \"" + said + "\"" : "") + ". That is ALL that happened — react to exactly this, name it, invent nothing else (no other conversations, no one else texting them)."
         : "Láttad, hogy " + player + " " + where + (others.length ? " (" + others.join(", ") + ")" : "") + (said ? ": „" + said + "”" : "") + ". CSAK ennyi történt — erre reagálj konkrétan, mást ne találj ki (más beszélgetést, hogy más is ír neki).") +
@@ -63055,15 +63060,28 @@ const EXTREME_NATURES = [
     order: "dangerous: volatile, a short fuse, threats that feel real, an edge that makes people careful around them" },
 ];
 /* R92: a player / fuckboy / commitment-shy character stays that — cool, cocky, flirty, never clingy or possessive */
+/* R101: one shared test — the player / fuckboy words are looked for in every field that describes the character
+   (personality, traits, extra, speech, bio, looks) and in the read character bible, not only in four fields */
+const PLAYER_TYPE_RE = /fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious|typical|classic)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|womani[sz]er|heartbreaker|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|egyéjszakás|nem randizik|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i;
+function isPlayerType(w, c) {
+  if (!c) return false;
+  const fields = [c.personality, c.traits, c.extra, c.speech, c.bio, c.looks, c.voice].filter(Boolean).join(" ");
+  if (PLAYER_TYPE_RE.test(fields)) return true;
+  try {
+    const bible = typeof characterBibleFor === "function" ? characterBibleFor(w, c.id) : null;
+    const extremes = bible && Array.isArray(bible.extremes) ? bible.extremes.map((x) => [x && x.trait, x && x.shows].filter(Boolean).join(" ")).join(" ") : "";
+    return PLAYER_TYPE_RE.test([bible && bible.core, extremes].filter(Boolean).join(" "));
+  } catch (error) { return false; }
+}
 function playerTypeDirective(w, c) {
   if (!w || !c || isHuman(w, c.id)) return "";
-  const nature = [c.personality, c.traits, c.extra, c.speech].filter(Boolean).join(" ");
-  if (!/fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|egyéjszakás|nem randizik|womani[sz]er|heartbreaker|commitment[- ]?(?:phob|shy|issues)|emotionally unavailable|no strings|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz/i.test(nature)) return "";
+  if (!isPlayerType(w, c)) return "";
   const name = String(c.name || "").toUpperCase();
   return "PLAYER TYPE — " + name + " (FROM THEIR OWN SHEET): cocky, charming, flirts easily and with more than one person, keeps everything light and casual. " +
     "Never clingy, never possessive: no \"you're mine\", no \"I can't stand sharing\", no jealous interrogations about who they talk to — if something bothers " + name + ", it shows as a cocky jab or a provocation while acting unbothered. " +
     "Real feelings stay hidden behind jokes and flirting; talk of commitment or feelings makes " + name + " deflect or back off. " +
-    "A mood recorded earlier as possessive or jealous does not change who " + name + " is — it shows only as a cocky remark.";
+    "A mood recorded earlier as possessive or jealous does not change who " + name + " is — it shows only as a cocky remark. " +
+    "NEVER says that feelings are real, growing or \"catching up\", never talks about \"the line between fake and real\", \"where this goes\" or \"something more\", and never tells the other person THEY are catching feelings. When someone asks what his problem is or pushes about feelings, " + name + " shrugs it off with one short cocky line or flirts — confused, defensive feeling-talk is not who he is. Two short sentences at most.";
 }
 
 function extremeNatureText(w, c) {
@@ -65485,7 +65503,9 @@ function fakeDatingBehaviorCard(w, actorId, targetId) {
   /* a player / fuckboy / commitment-shy type admits real feelings much harder */
   const actor = charById(w, actorId) || {};
   const nature = [actor.personality, actor.traits, actor.extra, actor.speech].filter(Boolean).join(" ");
-  const guarded = /fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|egyéjszakás|nem randizik|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
+  let playerTypeActor = false;
+  try { playerTypeActor = isPlayerType(w, actor); } catch (error) { playerTypeActor = false; }
+  const guarded = playerTypeActor || /fuck ?boy|f\*ckboy|playboy|\b(?:a|total|such a|known|notorious)\s+player\b|ladies\W? ?man|casanova|lothario|skirt[- ]chaser|sleeps around|one[- ]night stands?|hook ?ups?\b|(?:never|doesn\W?t|does not|won\W?t) (?:date|do relationships|commit)|no girlfriends?|flirts? with (?:every|any)one|egyéjszakás|nem randizik|womani[sz]er|heartbreaker|commitment|emotionally unavailable|never (?:does|catches) feelings|no strings|casual only|guarded|n[őo]cs[aá]b[aá]sz|csajoz[oó]|szoknyavad[aá]sz|nem k[oö]telez|nem szerelmes t[ií]pus/i.test(nature);
   return en
     ? "FAKE DATING WITH " + target + ": the two of you PRETEND to be a couple. In public (posts, comments, events with others) keep up the act — couple behaviour, pet names, defending the 'relationship', reacting as a partner would. Never reveal publicly that it is fake — no 'fake girlfriend', 'our little act', 'pretend couple' in a comment or post, not even as a joke or a jab: to everyone else you are simply together." +
       " In private (DMs, scenes with only the two of you) the real feelings" + (real ? " (" + real + ")" : "") + " only LEAK — a look held too long, jealousy you deny, staying longer than the deal needs, a softer moment you immediately joke away. Liking them or wanting them is fine to show; ADMITTING that you feel more, that it is not fake for you any more, does not happen in an ordinary DM: you deflect ('it's part of the act', 'don't flatter yourself', a joke, a flirt, a change of subject) and get colder if pressed. If they say you are good at faking it, you take the bait as a compliment or a challenge ('I'm good at everything') — you do NOT answer 'I'm not faking', 'I mean every word' or anything that says the feelings are real. You also never push to make it real ('commit for real', 'act like a real girlfriend / boyfriend', 'are you scared to make it real') — the deal stays the deal, you only tease about the act." +

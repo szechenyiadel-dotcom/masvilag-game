@@ -71,8 +71,8 @@ test("R81: extreme orders never invite invented events, and carry the speaker's 
 });
 
 test("R92: a player / fuckboy keeps it cool — never possessive, never 'you're mine'", () => {
-  const ctx = vm.createContext({ String, RegExp, isHuman: () => false });
-  vm.runInContext(pick(["playerTypeDirective"]), ctx);
+  const ctx = vm.createContext({ String, RegExp, isHuman: () => false, Array });
+  vm.runInContext(pick(["PLAYER_TYPE_RE", "isPlayerType", "playerTypeDirective"]), ctx);
   const d = ctx.playerTypeDirective({}, { id: "b", name: "Brent", personality: "Cocky fuckboy, never commits." });
   assert.match(d, /PLAYER TYPE — BRENT/);
   assert.match(d, /no \"you're mine\"/);
