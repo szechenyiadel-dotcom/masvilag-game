@@ -5706,24 +5706,22 @@ function taskProviderOrder(requestedProvider, body) {
     /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
     if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
-    /* A reply the player is waiting on: OpenRouter first (Gemma, free; then the paid OpenRouter route), then Mistral 1 and 2
-       (the owner's rule: OpenRouter is the first paid provider, never Mistral). */
-    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
+    /* A reply the player is waiting on (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2.
+       The free Gemma slot is left out: it answered 429 to every one of its last 200 requests. */
+    raw = ["openrouter-dm-venice", "mistral", "mistral2"];
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
        waiting on it (reroll / own answer). */
     /* R85 (owner's rule): popups never use a paid provider, not even when the player is waiting */
     raw = ["gemini", "groq", "groq2", "openrouter3"];
   } else if (source === "scene") {
-    /* Scenes: Dolphin (OpenRouter key 1, Gemma) -> the paid OpenRouter route -> Mistral 1 -> Mistral 2. */
-    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
+    /* Scenes (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2. */
+    raw = ["openrouter-dm-venice", "mistral", "mistral2"];
   } else if (isComment) {
-    /* Comments — the ones the player waits for and the background ones alike: Dolphin (OpenRouter key 1) ->
-       Nemotron :free -> the free Gemini keys -> paid OpenAI -> paid Venice (OpenRouter key 2). */
-    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "openai", "openrouter-dm-venice"];
+    /* Comments and posts (the owner's rule): Gemma (OpenRouter, free) -> every Gemini key and model -> paid OpenAI. */
+    raw = ["openrouter-dm-dolphin", "gemini", "openai"];
   } else if (isFeed) {
-    /* Feed: Gemini -> Nemotron :free -> Dolphin -> Groq 1 -> Groq 2 (when the request fits them) -> paid OpenAI. */
-    raw = ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"];
+    raw = ["openrouter-dm-dolphin", "gemini", "openai"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Canon/identity knowledge: Gemini -> Groq 1 -> Groq 2 (when it fits) -> Nemotron -> OpenAI. */
     raw = ["gemini", "groq", "groq2", "openrouter3", "openai"];
@@ -5925,7 +5923,9 @@ async function executeAITask(task) {
     if (chainBudgetMs) {
       const providersLeft = taskProviderOrder(task.requestedProvider, task.body)
         .filter((p) => !attempted.has(p) && !AI_GATE.providerConfigurationErrors.has(p) && providerCooldownMs(p) <= 0).length;
-      const allowedMs = providerTimeBudget({ budgetMs: chainBudgetMs, elapsedMs: Date.now() - chainStartedAt, providersLeft, isFirst: attempted.size === 1 });
+      /* Gemini is the one that really writes comments and posts (the free Gemma ahead of it answers 429 in a blink), so it
+         is not held to the short slice of the free models in the middle of a chain */
+      const allowedMs = providerTimeBudget({ budgetMs: chainBudgetMs, elapsedMs: Date.now() - chainStartedAt, providersLeft, isFirst: attempted.size === 1, ...(provider === "gemini" ? { middleCapMs: Infinity } : {}) });
       if (allowedMs) providerBody = { ...task.body, timeout_ms: allowedMs };
     }
 
