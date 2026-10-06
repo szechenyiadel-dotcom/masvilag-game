@@ -117,3 +117,16 @@ test("R99: a fake-dating fuckboy never pushes to make it real and answers short"
   assert.match(source, /keepFakeDatingLane\(w, c\.id, w\.meId,/);
   assert.match(source, /keepFakeDatingLane\(view, bot\.id, view\.meId, fixFollowDirection/);
 });
+
+test("R100: the DM prompt spells out who said what in the last exchange; 'feels too real' is a push too", () => {
+  const ctx = vm.createContext({ String, worldLanguage: () => "en" });
+  vm.runInContext(pick(["directDmLastExchangeBlock"]), ctx);
+  const w = { player: { name: "Tandy" }, chats: { k: [{ from: "c", text: "You gotta lock it down, Bowen." }, { from: "me", text: "I'm not using you" }] } };
+  const block = ctx.directDmLastExchangeBlock(w, { name: "Brent" }, "k", "I'm not using you");
+  assert.match(block, /YOU \(Brent\) wrote before: «You gotta lock it down, Bowen\.»/);
+  assert.match(block, /Tandy \(the player, NOT you\) has just written: «I'm not using you»/);
+  const ctx2 = vm.createContext({ RegExp });
+  const PUSH = vm.runInContext(pick(["FAKE_DATING_PUSH_RE"]) + ";FAKE_DATING_PUSH_RE", ctx2);
+  assert.ok(PUSH.test("Because, newsflash, Bowen, for a fake relationship, it feels way too real at times."));
+  assert.ok(!PUSH.test("You're playing with fire, and I enjoy the burn."));
+});
