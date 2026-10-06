@@ -1987,6 +1987,10 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .hush-compose .social-composer-actions .btn.primary { min-height:52px; padding:12px 26px; font-size:15px; }
 .hush-compose .social-media-panel { margin-left:0; }
 .hush-compose-x, .hush-compose-post, .hush-compose-title-short { display:none; }
+/* the bottom tab bar steps aside while writing: it covered the composer's Image button (and other inputs) once the
+   phone keyboard was up */
+.hush-tabbar.hush-tabbar-hidden { display:none !important; }
+.mv:has(textarea:focus, input:not([type=range]):not([type=checkbox]):not([type=file]):focus) .hush-tabbar { display:none !important; }
 .hush-compose-head { gap:10px; }
 @media (max-width:759px) {
   /* phone: the same bottom sheet as before (writing works the usual way), but "Whisper it" sits in the sheet's
@@ -61704,7 +61708,7 @@ const signOut = useCallback(async () => {
         </div>
       ) : null}
 
-      <nav className="hush-tabbar" aria-label={tt("Fő menü", "Main menu")}>
+      <nav className={"hush-tabbar" + (composeOpen ? " hush-tabbar-hidden" : "")} aria-label={tt("Fő menü", "Main menu")}>
         <div className="hush-tabs">
           {MOBILE_TABS.map(([k, label]) => (
             <button key={k} type="button" className={tab === k ? "on" : ""} onClick={() => goTab(k)}>{label}</button>
