@@ -108,7 +108,7 @@ test("The providers of one background request share the app's timeout, so the ch
   const { context } = gate(ENV, (provider, body) => { seen.push([provider, body.timeout_ms]); return quota(provider); });
   await context.executeAITask(task(context, "feed-post", { timeout_ms: 38000 }));
   assert.deepEqual(seen.map(([provider]) => provider), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
-  assert.equal(seen[0][1], 17100, "Gemini, first of six, may take less than half");
+  assert.ok(Math.abs(seen[0][1] - 17100) <= 100, "Gemini, first of six, may take less than half (a few ms of the real clock have passed): " + seen[0][1]);
   for (const [provider, ms] of seen) assert.ok(ms >= 12000 && ms <= 38000, provider + " " + ms);
   assert.ok(seen[seen.length - 1][1] >= 12000, "the last one still has the floor");
   /* a DM, a scene and a careful reading keep their providers' own timeouts */

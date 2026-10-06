@@ -37676,7 +37676,8 @@ const DM_MEET_COMMIT_RE = /\b(?:now|right now|be there|on my way|omw|meet (?:you
    missed all of that, and no Event invitation followed. */
 const DM_MEET_PLACE_PROPOSAL_RE = /\b(?:come|get|be|show up|pull up|swing by|head|go|meet(?: me| you| up)?|see (?:you|u)|find me|wait for me)\s+(?:to|at|in|on|by|near|outside|downstairs|over to|down to)\s+(?:my|the|our|your|his|her|a|an|this|that)\b|\bmy (?:place|room|apartment|flat|ship|deck|dojo|gym|house|car)\b[^.!?]{0,30}\b(?:tonight|now|later|tomorrow|at|in)\b|(?:gyere|j[oö]jj|tal[aá]lkozzunk|megv[aá]rlak|v[aá]rlak)\b[^.!?]{0,30}(?:hozz[aá]m|n[aá]lam|ott|itt|[aá]ra|este|ma|holnap)/i;
 const DM_MEET_TIME_RE = /\b(?:in|within|after)\s+(?:an?|one|two|three|four|five|ten|fifteen|twenty|thirty|\d+|a few|a couple of)\s*(?:hours?|hrs?|mins?|minutes?)\b|\bat\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:one|an) hour\b|\b(?:tonight|tomorrow|later today|this evening|this afternoon|noon|midnight|o'?clock)\b|(?:\bholnap\b|\bma este\b|\bdélben\b|\b\d{1,2}\s*(?:órakor|óra)\b|\begy óra\b|\b(?:perc|óra)\s*múlva\b)/i;
-const DM_MEET_ACCEPT_RE = /\b(?:fine|ok(?:ay)?|sure|deal|alright|all right|sounds good|works for me|bet|yes|yeah|yep|i'?ll be there|be there|i'?ll come|on time|see (?:you|u)(?: then| there)?|on my way|omw|don'?t be late|count me in|i'?m in)\b|(?:rendben|persze|megegyezt[uü]nk|ott leszek|ott vagyok|j[oö]v[oö]k|megyek|benne vagyok|[aá]ll az alku|[uú]gy lesz)/i;
+const DM_MEET_ACCEPT_RE = /\b(?:fine|ok(?:ay)?|sure|deal|alright|all right|sounds good|works for me|bet|yes|yeah|yep|i'?ll be there|be there|i'?ll come|on time|see (?:you|u)(?: then| there)?|on my way|omw|count me in|i'?m in|good|don'?t (?:be late|make me wait|keep me waiting|test me|stand me up)|better (?:be|show)|i'?ll (?:be )?wait(?:ing)?|waiting (?:for you|there))\b|(?:rendben|persze|megegyezt[uü]nk|ott leszek|ott vagyok|j[oö]v[oö]k|megyek|benne vagyok|[aá]ll az alku|[uú]gy lesz|ne k[eé]sd|ne v[aá]rass|v[aá]rni foglak)/i;
+const DM_MEET_REFUSE_RE = /\b(?:no|nope|nah|never|not (?:happening|going to|a chance)|no way|forget it|dream on)\b|\bi (?:won'?t|can'?t|refuse)\b|(?:nem megyek|kiz[aá]rt|soha|ne [aá]lmodozz)/i;
 
 function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
   if (!w || !bot || !ck) return null;
@@ -37695,7 +37696,12 @@ function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
   /* settled in few words: a place or a time was named, and the answer in hand (or the one before it) says yes */
   const placeOrTimeProposed = mine.concat(theirs).slice(-10).some((x) => DM_MEET_PROPOSAL_RE.test(x) || DM_MEET_PLACE_PROPOSAL_RE.test(x));
   const timeNamed = mine.concat(theirs).slice(-10).some((x) => DM_MEET_TIME_RE.test(x));
-  const botSaysYes = theirs.slice(-2).some((x) => DM_MEET_ACCEPT_RE.test(x));
+  /* the answer in hand is not a refusal, and the other side said yes in some form lately: an acceptance word, a "don't be
+     late", or the time the player named, said back ("One hour.") */
+  const lastReply = String(replyText || "");
+  const refused = DM_MEET_REFUSE_RE.test(lastReply) && !DM_MEET_ACCEPT_RE.test(lastReply);
+  const playerNamedTime = mine.slice(-4).some((x) => DM_MEET_TIME_RE.test(x));
+  const botSaysYes = !refused && (theirs.slice(-4).some((x) => DM_MEET_ACCEPT_RE.test(x)) || (playerNamedTime && theirs.slice(-2).some((x) => DM_MEET_TIME_RE.test(x))));
   const playerSide = mine.slice(-4).some((x) => DM_MEET_PROPOSAL_RE.test(x) || DM_MEET_PLACE_PROPOSAL_RE.test(x) || DM_MEET_TIME_RE.test(x) || DM_MEET_COMMIT_RE.test(x));
   const settledInFewWords = placeOrTimeProposed && timeNamed && botSaysYes && playerSide;
   if (!(proposal && playerCommits && botCommits) && !settledInFewWords) return null;
