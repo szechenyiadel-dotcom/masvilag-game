@@ -57409,6 +57409,7 @@ if (targetNote) {
     const triggerPendingRow = triggerPendingKey && typeof fullSpecState === "function"
       ? (fullSpecState(view).pendingDmTriggers || {})[triggerPendingKey]
       : null;
+    const dmTriggerNow = String(action.payload && action.payload.trigger || "");
     AUTONOMOUS_DM_TRIGGER_CONTEXT = {
       botId: bot.id,
       trigger: String(action.payload && action.payload.trigger || ""),
@@ -57437,7 +57438,7 @@ if (targetNote) {
         bot.id,
         /* R89: an unprompted DM is a text message, never roleplay narration */
         out && out.text
-          ? stripSocialRoleplayNarration(view, bot.id, String(out.text).trim())
+          ? fixFollowDirection(dmTriggerNow, stripSocialRoleplayNarration(view, bot.id, String(out.text).trim()))
           : "",
         280
       );
@@ -65117,19 +65118,42 @@ function groundedFollowBackAttemptFailed(w, botId, reason) {
   groundedEventLog(w, "follow-not-returned", "failed", "Attempt " + row.attempts + "/" + FOLLOW_BACK_DM_MAX_ATTEMPTS + " failed (" + reason + "); next try in " + Math.round((row.dueAt - now()) / 60000) + " min.", "follow:" + botId + ">" + String(row.humanId || ""));
 }
 
+/* R98: in a "you did not follow me back" DM the speaker is the one who followed — a reversed
+   "you followed me, but you didn't follow back" is turned the right way round */
+function fixFollowDirection(trigger, value) {
+  const text = String(value || "");
+  if (String(trigger || "") !== "follow-not-returned" || !text) return text;
+  return text
+    .replace(/\b(Y|y)ou followed me\b/g, (m, y) => (y === "Y" ? "I" : "I") + " followed you")
+    .replace(/\b(Y|y)ou(?:'ve| have) followed me\b/g, () => "I followed you")
+    .replace(/\bBekövettél\b/g, "Bekövettelek").replace(/\bbekövettél\b/g, "bekövettelek")
+    .replace(/\bKövettél\b/g, "Bekövettelek").replace(/\bkövettél be\b/g, "bekövettelek");
+}
+
 function autonomousDmTriggerDirective(w, bot) {
   const ctx = AUTONOMOUS_DM_TRIGGER_CONTEXT;
   if (!ctx || !bot || String(ctx.botId) !== String(bot.id)) return "";
   const player = (w && w.player && w.player.name) || "a játékos";
+  const enDir = worldLanguage(w, w && w.meId) === "en";
   if (ctx.trigger === "follow-not-returned") {
-    return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
-      "Bekövetted " + player + " profilját, de " + player + " NEM követett vissza. A személyiséged miatt ez zavar. " +
-      "Ebben a DM-ben erre reagálj a saját hangodon: szóvá teszed, kérdőre vonod, sértődötten, rámenősen vagy célzósan rákérdezel, miért nem követ vissza. " +
-      "Ne találj ki más okot, ne kérj bocsánatot, és ne írj semleges small talkot helyette.";
+    /* R98: the small model mixed up who followed whom ("you followed me, but you didn't follow back") —
+       the direction is spelled out in the world's language, and the tone follows the real relationship */
+    return enDir
+      ? "\n\n" + PROTECTED_TAIL_MARKER + "\nWHY YOU ARE WRITING NOW — A REAL EVENT (REQUIRED, \"skip\": false):\n" +
+        "YOU followed " + player + ". " + player + " has NOT followed YOU back. (You did the following; they are the one who did not follow back — never say they followed you.) " +
+        "Bring it up in your own voice, in the tone your ACTUAL relationship allows: a teacher / mentor / boss / older relative keeps it light, dry or teasing, never needy; a friend jokes or nudges; a crush, rival or proud type can be sulky, pushy or cutting. " +
+        "One or two short sentences, like a real text. Don't invent another reason, don't apologise, no neutral small talk instead."
+      : "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
+        "TE követted be " + player + " profilját, de " + player + " NEM követett vissza TÉGED. (Te követtél be, ő nem követett vissza — soha ne írd, hogy ő követett be téged.) " +
+        "Hozd szóba a saját hangodon, abban a hangnemben, amit a VALÓDI kapcsolatotok enged: tanár / mentor / főnök / idősebb rokon lazán, szárazon vagy ugratva, sosem könyörögve; barát poénkodva, bökdösve; crush, rivális vagy büszke típus sértődötten, rámenősen vagy szúrósan. " +
+        "Egy-két rövid mondat, mint egy igazi üzenet. Ne találj ki más okot, ne kérj bocsánatot, és ne írj semleges small talkot helyette.";
   }
   if (ctx.trigger === "player-unfollowed") {
-    return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
-      player + " az imént KIKÖVETETT téged (unfollow). Ebben a DM-ben erre reagálj a saját személyiséged és a kapcsolatotok szerint: megbántva, dühösen, kérdőre vonva, gúnyosan, sértetten vagy közönyt mímelve — ahogy te tennéd. Ne találj ki más okot.";
+    return enDir
+      ? "\n\n" + PROTECTED_TAIL_MARKER + "\nWHY YOU ARE WRITING NOW — A REAL EVENT (REQUIRED, \"skip\": false):\n" +
+        player + " just UNFOLLOWED you. React to that in this DM the way you would, given your personality and your actual relationship — hurt, angry, questioning, mocking, offended or faking indifference. Don't invent another reason."
+      : "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — VALÓDI, MEGTÖRTÉNT ESEMÉNY (KÖTELEZŐ, \"skip\": false):\n" +
+        player + " az imént KIKÖVETETT téged (unfollow). Ebben a DM-ben erre reagálj a saját személyiséged és a kapcsolatotok szerint: megbántva, dühösen, kérdőre vonva, gúnyosan, sértetten vagy közönyt mímelve — ahogy te tennéd. Ne találj ki más okot.";
   }
   if (/^comment-dm-/.test(String(ctx.trigger || "")) && ctx.causeText) {
     return "\n\n" + PROTECTED_TAIL_MARKER + "\nEZÉRT ÍRSZ MOST — A KOMMENTEKBEN MEGBESZÉLTÉTEK (KÖTELEZŐ, \"skip\": false):\n" + String(ctx.causeText).slice(0, 500) + "\nÍrj neki most DM-et, pontosan onnan folytatva, a saját hangodon.";
