@@ -2079,6 +2079,55 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .sheet { background:var(--card-grad); border:1px solid var(--card-line); }
 .toast, .flash { background:#0D1A12; border:1px solid var(--gossip-line); color:var(--text); box-shadow:0 14px 36px rgba(0,0,0,.5); }
 @media (min-width:760px) { .scrim { align-items:center; } .sheet { max-width:600px; } }
+
+/* phone header: logo + buttons on one line, the world clock on its own line below (it used to slide under the buttons) */
+@media (max-width:759px) {
+  .hdr-row { flex-wrap:wrap; row-gap:6px; }
+  .hdr-row > .hush-hdr-brand { display:contents !important; }
+  .hdr-row > .hush-hdr-actions { order:1; margin-left:auto; }
+  .hdr-row::after { content:""; order:1; flex-basis:100%; height:0; }
+  .hdr-row .hush-clock { order:2; }
+}
+
+/* ---------- hush: character editor (phone first; desktop gets the same tidy layout) ---------- */
+.char-edit-header { flex-wrap:wrap; row-gap:8px; }
+.char-edit-header h2 { font-family:var(--serif); font-weight:400; font-size:26px !important; letter-spacing:-.01em; margin:0; }
+.char-edit-nav { flex:1 0 100%; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+  margin:0 -14px; padding:2px 14px 2px; scroll-behavior:smooth; }
+.char-edit-nav::-webkit-scrollbar { display:none; }
+.char-edit-chip { flex:0 0 auto; border:1px solid var(--card-line); background:var(--card); color:var(--text-dim);
+  border-radius:999px; padding:7px 13px; font:600 13px/1.1 var(--sans); white-space:nowrap; cursor:pointer;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.char-edit-chip.on { color:#fff; background:var(--emerald); border-color:var(--emerald-a); box-shadow:0 4px 14px rgba(18,128,76,.35); }
+.char-edit-anchor { display:block; height:0; scroll-margin-top:124px; }
+.char-edit-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:10px; }
+.char-edit-grid > .char-field { min-width:0; }
+.char-edit-grid > .char-field-name, .char-edit-grid > .char-field-job, .char-edit-grid > .char-field-city:nth-child(odd) { grid-column:1 / -1; }
+.char-edit-grid .field-free { display:none; }
+.char-field.big .bar { height:2px !important; opacity:.7; }
+.char-field.big .bar + .hint, .char-field.big .field-free { text-align:right; font-size:11px; }
+.char-edit-sheet textarea.i { field-sizing:content; max-height:60vh; resize:vertical; }
+.char-edit-range { -webkit-appearance:none; appearance:none; height:28px; padding:0 !important; background:transparent !important;
+  border:0 !important; box-shadow:none !important; accent-color:var(--poison); }
+.char-edit-range::-webkit-slider-runnable-track { height:6px; border-radius:999px; background:linear-gradient(90deg, #4A5E6E, var(--card-line) 50%, var(--emerald-a)); }
+.char-edit-range::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; margin-top:-8px; border-radius:50%;
+  background:var(--poison); border:3px solid var(--bg); box-shadow:0 0 0 1px var(--emerald-a); }
+.char-edit-range::-moz-range-track { height:6px; border-radius:999px; background:linear-gradient(90deg, #4A5E6E, var(--card-line) 50%, var(--emerald-a)); }
+.char-edit-range::-moz-range-thumb { width:18px; height:18px; border-radius:50%; background:var(--poison); border:3px solid var(--bg); }
+.char-edit-rel-card { background:var(--card); border:1px solid var(--card-line) !important; border-radius:18px; padding:12px 12px 10px !important; }
+.hint-more { display:none; }
+@media (max-width:768px) {
+  .char-edit-sheet { padding-bottom:calc(96px + env(safe-area-inset-bottom)) !important; }
+  .char-edit-header { padding-bottom:8px !important; }
+  .char-edit-sheet .mobile-action-bar { position:fixed !important; left:0; right:0; bottom:0 !important; width:auto !important;
+    margin:0 !important; z-index:160; padding:10px 14px calc(10px + env(safe-area-inset-bottom)) !important; }
+  .char-edit-sheet label.f { margin-top:14px; }
+  .char-edit-sheet textarea.i { min-height:92px; }
+  .char-edit-grid .i { padding-left:12px; padding-right:12px; }
+  .hint-clamp-wrap .hint-clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:0; }
+  .hint-clamp-wrap.open .hint-clamp { display:block; -webkit-line-clamp:unset; overflow:visible; }
+  .hint-more { display:inline-block; border:0; background:none; padding:4px 0 2px; color:var(--poison); font:600 12px var(--sans); cursor:pointer; }
+}
 `;
 
 
@@ -8104,12 +8153,12 @@ function AlbumEditor({ value, onChange, owner }) {
         )}
       </label>
 
-      <p className="hint">
+      <ClampHint>
         {tt(
           "A feltöltött képet az AI automatikusan elemzi. Külön add meg pontosan, kik vannak a képen (pl. „Angel, Tory, Brad”), és külön írhatsz plusz megjegyzést is a helyzetről („afterparty”, „Brad mellett áll”, „Miyagi-Fang csapatedzés”). A 'ki van a képen' mező biztos kánon: ha a kép kikerül posztba, a posztoló és a többi AI is úgy kezeli, hogy ezek a játékbeli karakterek ténylegesen rajta vannak a képen. A képet posztolás után kiveszi az aktuális albumból, de világ-újraindításkor visszakerül.",
           "The AI automatically analyzes every uploaded image. Separately specify exactly who is in the image (for example “Angel, Tory, Brad”), and you can also add an extra contextual note (“afterparty”, “standing beside Brad”, “Miyagi-Fang team training”). The 'who is shown' field is treated as confirmed canon: when the image is posted, both the poster and the other AIs treat those in-game characters as actually being in the image. The image leaves the active album after posting, but returns to the album when the world is restarted."
         )}
-      </p>
+      </ClampHint>
 
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
         {list.map((x, i) => (
@@ -31792,7 +31841,7 @@ function RelPair({ w, aId, bId, aName, bName, update }) {
         </div>
         {r.description ? <p className="hint" style={{ marginBottom: 6 }}>{r.description}</p> : r.why ? <p className="hint" style={{ marginBottom: 6 }}>{r.why}</p> : null}
         <RelBar score={r.score} />
-        <input className="i mono" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
+        <input className="i mono char-edit-range" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
           value={r.score} onChange={(e) => update((n) => setConfiguredRel(n, from, to, { score: Number(e.target.value) }, "manual"))} />
         <MoodPicker value={r.mood} style={{ padding: "6px 10px", fontSize: 12 }}
           onChange={(v) => update((n) => setConfiguredRel(n, from, to, { mood: v }, "manual"))} />
@@ -31832,6 +31881,29 @@ const MEASURED = [
 /* Mezőnkénti keretjelző: írás közben látod, mennyi fér át. */
 const NO_LIMIT_UI = { name: 1, username: 1, birth: 1, height: 1, avatar: 1 };
 
+/* hush mobile editor: long help texts fold to two lines on a phone (tap "More"); on desktop they stay open */
+function ClampHint({ children, style }) {
+  const { tt } = useLang();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={"hint-clamp-wrap" + (open ? " open" : "")}>
+      <p className="hint hint-clamp" style={style}>{children}</p>
+      <button type="button" className="hint-more" onClick={() => setOpen((v) => !v)}>{open ? tt("Kevesebb", "Less") : tt("Bővebben", "More")}</button>
+    </div>
+  );
+}
+
+const CHAR_EDIT_SECTIONS = [
+  ["sec-gen", "Generálás", "Generate"],
+  ["sec-pics", "Képek", "Photos"],
+  ["sec-basics", "Alapok", "Basics"],
+  ["sec-look", "Bio & külső", "Bio & looks"],
+  ["sec-mind", "Személyiség", "Personality"],
+  ["sec-story", "Háttér", "Backstory"],
+  ["sec-bonds", "Kötelékek", "Bonds"],
+];
+const CHAR_EDIT_ANCHOR_AT = { name: "sec-basics", bio: "sec-look", personality: "sec-mind", secrets: "sec-story" };
+
 const FieldLimit = React.memo(function FieldLimit({ field, value }) {
   const { tt, lang } = useLang();
   const safeLang = asLang(lang);
@@ -31842,7 +31914,7 @@ const FieldLimit = React.memo(function FieldLimit({ field, value }) {
 
   if (isFree(field) && !CORE_CAP[field]) {
     return (
-      <p className="hint" style={{ marginTop: 4, color: "var(--muted)" }}>
+      <p className="hint field-free" style={{ marginTop: 4, color: "var(--muted)" }}>
         {len
           ? tt(
               `${len.toLocaleString("hu")} karakter · teljes egészében átmegy`,
@@ -32012,6 +32084,41 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
   useEditLock();
   const { tt } = useLang();
   const [c, setC] = useState(initial);
+  /* hush: section jump bar — only scrolls, never changes data */
+  const editSheetRef = useRef(null);
+  const editNavRef = useRef(null);
+  const [editSection, setEditSection] = useState("sec-gen");
+  const editScrollRaf = useRef(0);
+  const editSections = CHAR_EDIT_SECTIONS.filter(([key]) => key !== "sec-bonds" || Boolean(w));
+  const jumpToSection = (key) => {
+    const root = editSheetRef.current;
+    const el = root && root.querySelector('[data-sec="' + key + '"]');
+    if (!el) return;
+    setEditSection(key);
+    try { el.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (error) { el.scrollIntoView(); }
+  };
+  const trackSection = () => {
+    if (editScrollRaf.current) return;
+    editScrollRaf.current = requestAnimationFrame(() => {
+      editScrollRaf.current = 0;
+      const root = editSheetRef.current;
+      if (!root) return;
+      const head = root.querySelector(".char-edit-header");
+      const line = (head ? head.getBoundingClientRect().bottom : 0) + 24;
+      let current = "sec-gen";
+      root.querySelectorAll("[data-sec]").forEach((el) => { if (el.getBoundingClientRect().top <= line) current = el.getAttribute("data-sec"); });
+      setEditSection((prev) => (prev === current ? prev : current));
+    });
+  };
+  useEffect(() => {
+    const nav = editNavRef.current;
+    const chip = nav && nav.querySelector(".on");
+    if (!nav || !chip) return;
+    const left = chip.offsetLeft - 16, right = chip.offsetLeft + chip.offsetWidth + 16;
+    if (left < nav.scrollLeft) nav.scrollLeft = left;
+    else if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
+  }, [editSection]);
+  useEffect(() => () => { if (editScrollRaf.current) cancelAnimationFrame(editScrollRaf.current); }, []);
   const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
   /* MÁSVILÁG MANUAL RELATIONSHIP TOUCH GUARD v1 */
@@ -32063,6 +32170,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
   return (
     <div
       className="scrim char-edit-scrim"
+      onScroll={trackSection}
       onClick={(e) => {
         // A karakter szerkesztőből KIZÁRÓLAG a Mentés vagy a Vissza gombbal
         // lehessen kilépni. A háttérre / oldalra kattintás nem zárja be.
@@ -32071,6 +32179,8 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
     >
       <div
         className="sheet char-edit-sheet"
+        ref={editSheetRef}
+        onScroll={trackSection}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="between char-edit-header">
@@ -32079,8 +32189,16 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             <ChevronLeft size={14} />
             {tt("Vissza", "Back")}
           </button>
+          <nav className="char-edit-nav" ref={editNavRef} aria-label={tt("Szakaszok", "Sections")}>
+            {editSections.map(([key, hu, en]) => (
+              <button key={key} type="button" className={"char-edit-chip" + (editSection === key ? " on" : "")} onClick={() => jumpToSection(key)}>
+                {tt(hu, en)}
+              </button>
+            ))}
+          </nav>
         </div>
 
+        <span className="char-edit-anchor" data-sec="sec-gen" />
         <div className="card" style={{ background: "var(--raised)" }}>
           <label className="f" style={{ marginTop: 0 }}>{tt("Generálás egy mondatból", "Generate from one sentence")}</label>
           <input className="i" value={idea} placeholder={tt("pl. toxikus, gazdag lány, aki mindenkiről tud valamit", "e.g. toxic, rich girl who knows something about everyone")}
@@ -32093,6 +32211,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
         <BudgetMeter c={c} setErr={setErr}
           onBrief={(brief, src) => setC((p2) => ({ ...p2, brief, briefSrc: src }))} />
 
+        <span className="char-edit-anchor" data-sec="sec-pics" />
         <ImagePicker
           value={c.avatar}
           onChange={(v) => set("avatar", v)}
@@ -32143,16 +32262,17 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             }
           />
 
-          <p className="hint" style={{ marginTop: 6 }}>
+          <ClampHint style={{ marginTop: 6 }}>
             {tt(
               "Ez a háttérközönség: olyan követők, akik léteznek a világban, de nem külön AI-karakterek. A valódi játékbeli karakterek követése ezen felül számít hozzá.",
               "This is the background audience: followers who exist in the world but are not separate AI characters. Follows from actual in-game characters are added on top."
             )}
-          </p>
+          </ClampHint>
         </div>
 
-        {FIELDS.map(([k, label, big]) => (
-          <div key={k}>
+        {(() => { const renderField = ([k, label, big]) => (
+          <div key={k} className={"char-field char-field-" + k + (big ? " big" : " short")}>
+            {CHAR_EDIT_ANCHOR_AT[k] ? <span className="char-edit-anchor" data-sec={CHAR_EDIT_ANCHOR_AT[k]} /> : null}
             <label className="f">{tt(label, FIELD_LABELS_EN[k] || label)}</label>
             {big ? (
               <textarea
@@ -32168,21 +32288,21 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
             )}
             <FieldLimit field={k} value={c[k]} />
             {k === "connections" && (
-              <p className="hint" style={{ marginTop: 6 }}>
+              <ClampHint style={{ marginTop: 6 }}>
                 {tt(
                   "Ide írd a karakter fontos kapcsolatait szabad szövegként. AKTÍV játékbeli karaktert is megadhatsz név szerint — például „Tory — best friend”, „Brad — rival”, „Angel — secret crush”. Ha a név létező karakterre illeszkedik, a rendszer ezt privát, célpont-specifikus kánonként használja ÉS automatikus kiinduló relationship baseline-t építhet belőle. A játékban nem létező szülő/ex/mentor stb. továbbra is csak privát háttérkánon marad.",
                   "Write the character's important relationships here as free text. You MAY name an ACTIVE in-game character — for example “Tory — best friend”, “Brad — rival”, or “Angel — secret crush”. When the name matches an existing character, the system uses it as private target-specific canon AND can automatically build the starting relationship baseline from it. Parents/exes/mentors who are not active characters remain private background canon only."
                 )}
-              </p>
+              </ClampHint>
             )}
             {k === "extra" && (
-              <p className="hint" style={{ marginTop: 6 }}>
+              <ClampHint style={{ marginTop: 6 }}>
                 {tt("Bármi, ami nem fért a többi mezőbe, de számít: szokások, betegség, allergia, munkahelyi helyzet, kisállat, lakás, anyagi helyzet, vallás, hobbi részletei, régi sérelmek, tervek, vagy amit te szabályként adsz meg neki. Az AI ezt is olvassa minden megszólalás előtt.",
                     "Anything that didn't fit in the other fields, but matters: habits, illness, allergies, work situation, pet, home, finances, religion, hobby details, old grievances, plans, or anything you set as a rule for them. The AI reads this too before every line.")}
-              </p>
+              </ClampHint>
             )}
             {k === "birth" && (ageOf(c, w) || zodiac(c.birth)) && (
-              <p className="hint" style={{ marginTop: 6 }}>
+              <p className="hint char-age-hint" style={{ marginTop: 6 }}>
                 {ageOf(c, w) ? tt(`${ageOf(c, w)} éves`, `${ageOf(c, w)} years old`) : ""}
                 {ageOf(c, w) && zodiac(c.birth) ? " · " : ""}
                 {localizedZodiac(
@@ -32193,18 +32313,25 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
               </p>
             )}
           </div>
-        ))}
+        );
+        return (
+          <>
+            <div className="char-edit-grid">{FIELDS.filter((f) => !f[2]).map(renderField)}</div>
+            {FIELDS.filter((f) => f[2]).map(renderField)}
+          </>
+        ); })()}
 
         {w && (
           <>
             <div className="sep" />
+            <span className="char-edit-anchor" data-sec="sec-bonds" />
             <label className="f" style={{ marginTop: 0 }}>{tt("Kapcsolatok — aktív karakterek között", "Bonds — between active characters")}</label>
-            <p className="hint">
+            <ClampHint>
               {tt(
                 "Itt a játékban élő, aktuális kapcsolatot módosíthatod. Restartkor minden mező visszaáll a teljes karakterlapokból elemzett alapra. Az A → B és B → A érzéseit a két saját lap külön határozza meg; a közös csoportokat és igazolt tényeket a rendszer egyezteti.",
                 "Here you can modify the current in-game relationship. Restart restores every field from the baseline analyzed from the complete character sheets. A → B and B → A feelings come from each owner's sheet separately; the system reconciles shared groups and supported facts."
               )}
-            </p>
+            </ClampHint>
 
             {others.length === 0 && <p className="hint" style={{ marginTop: 10 }}>{tt("Még nincs kihez viszonyulnia.", "There's no one to relate to yet.")}</p>}
 
@@ -32220,7 +32347,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
                     <span className="relnum mono" style={{ color: relColor(r.score) }}>{r.score > 0 ? "+" : ""}{r.score} · {relLabel(r)}</span>
                   </div>
                   <RelBar score={r.score} />
-                  <input className="i mono" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
+                  <input className="i mono char-edit-range" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} type="range" min="-100" max="100"
                     value={r.score} onChange={(e) => setRelDraft(o.id, { score: Number(e.target.value) })} />
                   <BondPicker value={r.bond} fixed={r.fixed} style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
                     onChange={(p) => setRelDraft(o.id, p)} />
@@ -61383,7 +61510,7 @@ const signOut = useCallback(async () => {
       <div className="mv-wrap">
         <div className="hdr">
           <div className="hdr-row">
-            <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="hush-hdr-brand" style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <HushMark />
               <span className="hush-clock" title={tt("Játékbeli idő", "In-game time")}><Moon size={13} /> {worldClockText}</span>
             </div>
