@@ -2091,6 +2091,9 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 
 /* ---------- hush: character editor (phone first; desktop gets the same tidy layout) ---------- */
 .char-edit-header { flex-wrap:wrap; row-gap:8px; }
+.char-edit-header { gap:8px; }
+.char-edit-header h2 { flex:1 1 auto; }
+.char-edit-head-save { display:none; }
 .char-edit-header h2 { font-family:var(--serif); font-weight:400; font-size:26px !important; letter-spacing:-.01em; margin:0; }
 .char-edit-nav { flex:1 0 100%; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
   margin:0 -14px; padding:2px 14px 2px; scroll-behavior:smooth; }
@@ -2117,10 +2120,14 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .char-edit-rel-card { background:var(--card); border:1px solid var(--card-line) !important; border-radius:18px; padding:12px 12px 10px !important; }
 .hint-more { display:none; }
 @media (max-width:768px) {
-  .char-edit-sheet { padding-bottom:calc(96px + env(safe-area-inset-bottom)) !important; }
+  /* the Save bar sticks to the bottom of the editor's own scroll area (a fixed bar inside a scrolling sheet is not
+     shown by some phone browsers); no bottom padding, because sticky stops that far above the edge */
+  .char-edit-sheet { padding-bottom:0 !important; }
   .char-edit-header { padding-bottom:8px !important; }
-  .char-edit-sheet .mobile-action-bar { position:fixed !important; left:0; right:0; bottom:0 !important; width:auto !important;
-    margin:0 !important; z-index:160; padding:10px 14px calc(10px + env(safe-area-inset-bottom)) !important; }
+  .char-edit-head-save { display:inline-flex; min-height:44px; padding:0 16px; }
+  .char-edit-sheet .mobile-action-bar { position:sticky !important; bottom:0 !important; z-index:160;
+    width:calc(100% + 28px) !important; margin:18px -14px 0 !important;
+    padding:10px 14px calc(12px + env(safe-area-inset-bottom)) !important; }
   .char-edit-sheet label.f { margin-top:14px; }
   .char-edit-sheet textarea.i { min-height:92px; }
   .char-edit-grid .i { padding-left:12px; padding-right:12px; }
@@ -32097,6 +32104,31 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
     setEditSection(key);
     try { el.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (error) { el.scrollIntoView(); }
   };
+  const saveChar = () => {
+      if (!c.name || !c.name.trim()) {
+        return setErr(
+          tt(
+            "A névnek muszáj lennie.",
+            "The name is required."
+          )
+        );
+      }
+
+      const touchedRels = {};
+      relTouched.forEach((id) => {
+        if (rels[id]) touchedRels[id] = rels[id];
+      });
+      onSave(
+        {
+          ...c,
+          connections: String(c.connections || ""),
+          username: (c.username || c.name)
+            .toLowerCase()
+            .replace(/[^a-z0-9._]/g, "")
+        },
+        touchedRels
+      );
+  };
   const trackSection = () => {
     if (editScrollRaf.current) return;
     editScrollRaf.current = requestAnimationFrame(() => {
@@ -32188,6 +32220,9 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
           <button className="btn tiny ghost" onClick={onClose}>
             <ChevronLeft size={14} />
             {tt("Vissza", "Back")}
+          </button>
+          <button type="button" className="btn tiny primary char-edit-head-save" onClick={saveChar}>
+            {tt("Mentés", "Save")}
           </button>
           <nav className="char-edit-nav" ref={editNavRef} aria-label={tt("Szakaszok", "Sections")}>
             {editSections.map(([key, hu, en]) => (
@@ -32362,31 +32397,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
         <div className="mobile-action-bar" style={{ marginTop: 18 }}>
   <button
     className="btn primary full"
-    onClick={() => {
-      if (!c.name || !c.name.trim()) {
-        return setErr(
-          tt(
-            "A névnek muszáj lennie.",
-            "The name is required."
-          )
-        );
-      }
-
-      const touchedRels = {};
-      relTouched.forEach((id) => {
-        if (rels[id]) touchedRels[id] = rels[id];
-      });
-      onSave(
-        {
-          ...c,
-          connections: String(c.connections || ""),
-          username: (c.username || c.name)
-            .toLowerCase()
-            .replace(/[^a-z0-9._]/g, "")
-        },
-        touchedRels
-      );
-    }}
+    onClick={saveChar}
   >
     {tt("Mentés", "Save")}
   </button>
