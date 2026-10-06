@@ -58,8 +58,8 @@ test("Unprompted DMs: 'text me', no follow-back and unfollow always come; any ot
   const context = vm.createContext({ Math, Number, Array, String, RegExp, now: () => 10 * 3600e3 });
   vm.runInContext(pick(["DM_ALWAYS_ALLOWED_TRIGGER_RE", "OTHER_DM_HOURLY_MAX", "OTHER_DM_WINDOW_MS", "dmTriggerAlwaysAllowed", "otherDmBudgetOpen"]), context);
   const t = 10 * 3600e3;
-  for (const trigger of ["comment-dm-text-me", "follow-not-returned", "player-unfollowed", "popup-choice"]) assert.equal(context.dmTriggerAlwaysAllowed(trigger), true, trigger);
-  for (const trigger of ["gossip-story-reaction", "ignored-dm", "player-tagged", "romantic-jealousy", "relationship", "", undefined]) assert.equal(context.dmTriggerAlwaysAllowed(trigger), false, String(trigger));
+  for (const trigger of ["comment-dm-text-me", "follow-not-returned", "player-unfollowed"]) assert.equal(context.dmTriggerAlwaysAllowed(trigger), true, trigger);
+  for (const trigger of ["popup-choice", "gossip-story-reaction", "ignored-dm", "player-tagged", "romantic-jealousy", "relationship", "", undefined]) assert.equal(context.dmTriggerAlwaysAllowed(trigger), false, String(trigger));
   assert.equal(context.otherDmBudgetOpen({}, t), true);
   assert.equal(context.otherDmBudgetOpen({ otherDmTimes: [t - 20 * 60e3] }, t), false, "one other DM 20 minutes ago");
   assert.equal(context.otherDmBudgetOpen({ otherDmTimes: [t - 61 * 60e3] }, t), false, "R93: an hour later is still the same day");
@@ -70,6 +70,9 @@ test("Unprompted DMs: 'text me', no follow-back and unfollow always come; any ot
   assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete sim\.deferredAutonomousDms\[row\.botId\];continue;\}/);
   assert.match(planner, /if\(!budgetOpen&&!dmTriggerAlwaysAllowed\(row\.trigger\)\)\{delete state\.pendingDmTriggers\[row\.key\];continue;\}/);
   assert.match(source, /if \(!dmTriggerAlwaysAllowed\(action\.payload && action\.payload\.trigger\)\) \{\n      sim\.otherDmTimes = \[\.\.\.\(Array\.isArray\(sim\.otherDmTimes\) \? sim\.otherDmTimes : \[\]\)\.filter\(\(t\) => ts - Number\(t\) < 24 \* 3600e3\)/);
+  /* R99: follow / unfollow DMs one at a time, and a character asks about the same follow-back only once a week */
+  assert.match(source, /if \(now\(\) - \(Number\(state\.lastFollowDmAt\) \|\| 0\) < FOLLOW_DM_SPACING_MS\) continue;/);
+  assert.match(source, /state\.followBackDmSent\[botId\] = now\(\)/);
   assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,520}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"\]/);
 });
 

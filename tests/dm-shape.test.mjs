@@ -101,3 +101,19 @@ test("R98: a 'you did not follow back' DM never says the player followed the cha
   assert.match(source, /YOU followed " \+ player/);
   assert.match(source, /fixFollowDirection\(dmTriggerNow, stripSocialRoleplayNarration/);
 });
+
+test("R99: a fake-dating fuckboy never pushes to make it real and answers short", () => {
+  const ctx = vm.createContext({ String, RegExp, console: { info() {} },
+    fakeDatingBehaviorCard: (w, a) => (a === "brent" ? "FAKE DATING WITH TANDY … admitting real feelings is the LAST thing" : ""),
+    playerTypeDirective: () => "PLAYER TYPE", charById: () => ({ id: "brent" }), worldLanguage: () => "en" });
+  vm.runInContext(pick(["FAKE_DATING_PUSH_RE", "keepFakeDatingLane"]), ctx);
+  const k = (t, who = "brent") => ctx.keepFakeDatingLane({ meId: "tandy" }, who, "tandy", t);
+  const brent = "Oh, so I'm supposed to believe that I'm just a pawn in your little game, huh? Same old Tandy... always got a plan, don't you? But let me tell ya, Bowen, I'm a hell of a player too, and I play for keeps. This little romance of ours might be fake to the world, but when it comes to you and me, who the fuck knows? I'm just loving the ride, and maybe... just maybe, I'll win you over without the act. What do you say, girl? Wanna see where it goes?";
+  const out = k(brent);
+  assert.doesNotMatch(out, /without the act|see where it goes|play for keeps|who the fuck knows/);
+  assert.ok(out.split(/(?<=[.!?…])\s+/).length <= 3, out);
+  assert.equal(k("Wanna see where it goes?"), "Relax. It's an act, and I'm very good at it.");
+  assert.equal(k("Wanna see where it goes?", "ian"), "Wanna see where it goes?", "no fake-dating pair → untouched");
+  assert.match(source, /keepFakeDatingLane\(w, c\.id, w\.meId,/);
+  assert.match(source, /keepFakeDatingLane\(view, bot\.id, view\.meId, fixFollowDirection/);
+});
