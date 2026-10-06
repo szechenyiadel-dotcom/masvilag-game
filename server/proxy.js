@@ -3,6 +3,9 @@ import { assertCompleteGraph } from "../src/bondAnalysis.js";
 import {
   isForegroundRequest,
   filterProvidersForBody,
+  mayUsePaidLastResort,
+  PAID_LAST_RESORT_PROVIDERS,
+  providerTimeBudget,
   selectGeminiKeys,
   backgroundWaitSeconds,
   buildWaitingResult,
@@ -5727,10 +5730,10 @@ function taskProviderOrder(requestedProvider, body) {
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
        request too long for Groq goes to Gemini alone: a translation or reading cut short is wrong. */
     raw = groqCarriesWhole(groqRequestSize(body)) ? [...GROQ_UTILITY_CHAIN] : ["gemini"];
-  } else if (groqSmallEnough) {
-    raw = ["gemini", "groq", "groq2"];
   } else {
-    raw = ["gemini"];
+    /* Everything else the world writes on its own (notes, group chat, ...): Gemini, then OpenRouter (free), Groq when
+       the request is small enough for it, and OpenAI as the very last one. */
+    raw = ["gemini", "openrouter3", "openrouter-dm-dolphin", ...(groqSmallEnough ? ["groq", "groq2"] : []), "openai"];
   }
 
   /* The explicitly assigned DM and Gemini-fallback chains keep their exact order. Other request kinds may
@@ -5746,7 +5749,8 @@ function taskProviderOrder(requestedProvider, body) {
       providerAllowedForBody(provider, body)
     ),
     body,
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
+    /* OpenAI is the last resort for what the world writes on its own, once every free provider has failed */
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, paidAllowed: mayUsePaidLastResort(source, isGroqUtilitySource(source)) ? PAID_LAST_RESORT_PROVIDERS : [], allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
   );
 }
 
@@ -5903,18 +5907,31 @@ async function executeAITask(task) {
   const waitHintsMs = [];   /* when a busy or spent provider says it will be ready again */
   let last = null;
   let unusableAnswer = null;   /* a 200 that holds no JSON at all, kept only as the last resort */
+  /* The app that asked stops listening after its own timeout: the whole chain shares that time, so a slow first provider
+     (Gemini under load) cannot use it all and leave the next ones no chance. A DM and a scene keep their providers' own
+     timeouts, and so does a careful reading. */
+  const chainBudgetMs = String(task.body?.quality || "") !== "deep" && kindOfRequest !== "dm" && kindOfRequest !== "scene" && Number(task.body?.timeout_ms) > 0
+    ? upstreamTimeoutFor(task.body) : 0;
+  const chainStartedAt = Date.now();
 
   while (true) {
     const provider = healthyProvider(task.requestedProvider, task.body, attempted);
     if (!provider) break;
     attempted.add(provider);
     const model = providerModel(provider, task.body);
+    let providerBody = task.body;
+    if (chainBudgetMs) {
+      const providersLeft = taskProviderOrder(task.requestedProvider, task.body)
+        .filter((p) => !attempted.has(p) && !AI_GATE.providerConfigurationErrors.has(p) && providerCooldownMs(p) <= 0).length;
+      const allowedMs = providerTimeBudget({ budgetMs: chainBudgetMs, elapsedMs: Date.now() - chainStartedAt, providersLeft, isFirst: attempted.size === 1 });
+      if (allowedMs) providerBody = { ...task.body, timeout_ms: allowedMs };
+    }
 
     console.info("[ai-gate] start", new Date().toISOString(), `source=${task.source}`, `event=${task.eventId || "none"}`, `priority=${task.priority}`, `provider=${provider}`, `model=${model}`, `queued=${AI_GATE.queue.length}`);
     console.info("[ai-provider] request", `provider=${provider}`, `model=${model}`, `chars=${aiRequestChars(task.body)}`);
     logFullAIPromptDebug(task.body, task.source || task.body?.source || "unknown", provider);
 
-    const result = await callMessageProvider(provider, task.body);
+    const result = await callMessageProvider(provider, providerBody);
     result.provider = provider;
     result.model = result.model || model;
     last = result;

@@ -8,6 +8,7 @@ import {
   isGroqUtilitySource, groqCarriesWhole, estimateGroqTokens, groqPaceMaxWaitMs, createGroqPacer, groqRetryMs, GROQ_UTILITY_CHAIN, GROQ_UTILITY_SOURCES,
   createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, salvageSingleFieldJson,
   PAID_INPUT_PROVIDERS, paidMaxInputChars, paidCeilingFor, planCharBudget, createUsageMeter, createRefusalTracker, orderByRefusals,
+  mayUsePaidLastResort, PAID_LAST_RESORT_PROVIDERS, providerTimeBudget,
 } from "../server/aiPolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -27,7 +28,7 @@ const NAMES = [
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
   "providerAllowedForBody", "taskProviderOrder", "healthyProvider", "providerCooldownMs", "providerModel", "parseRetryAfterMs",
   "safeProviderMessage", "markProviderFailure", "markProviderSuccess", "summarizeProviderFailures", "logFullAIPromptDebug",
-  "shouldUseEmergencyOpenAIFallback", "answerText", "executeAITask",
+  "shouldUseEmergencyOpenAIFallback", "answerText", "executeAITask", "upstreamTimeoutFor", "AI_UPSTREAM_TIMEOUT_MS",
 ];
 
 function gate(env, scripted) {
@@ -37,6 +38,7 @@ function gate(env, scripted) {
     console: { info() {}, warn() {}, error() {} },
     Date, Math, Number, String, Array, Set, Map, Object, JSON, RegExp, Error,
     isForegroundRequest, filterProvidersForBody, selectGeminiKeys, backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, FREE_WRITING_CHAIN,
+    mayUsePaidLastResort, PAID_LAST_RESORT_PROVIDERS, providerTimeBudget,
     isGroqUtilitySource, groqCarriesWhole, GROQ_UTILITY_CHAIN, groqRetryMs, createGeminiLedger, geminiModelConfig, geminiModelLadder, planGeminiAttempts, geminiBlockReason, looksLikeRefusal, requestExpectsJson, salvageSingleFieldJson, createRefusalTracker, orderByRefusals,
     callMessageProvider: async (provider, body) => { calls.push(provider); return scripted(provider, body); },
   });
@@ -67,25 +69,29 @@ test("DM uses Dolphin key 1, Venice key 2, then Mistral; Nemotron is reserved fo
   assert.deepEqual(order("comments"), commentChain);
   assert.deepEqual(order("comments", { foreground: true }), commentChain);
   assert.deepEqual(order("player-post-comments", { foreground: true }), commentChain);
-  for (const source of ["notes", "meaning-analysis", "autonomy-other", "group-chat", "ambient-popup"]) {
+  /* What the world writes on its own: Gemini -> OpenRouter (free) -> Groq (small ones) -> OpenAI as the very last one. */
+  for (const source of ["notes", "autonomy-other", "group-chat"]) {
+    assert.deepEqual(order(source), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"], source);
+  }
+  /* Chores and popups never reach a paid provider. */
+  for (const source of ["meaning-analysis", "ambient-popup", "popup", "invite"]) {
     const background = order(source);
     for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
-    assert.ok(!background.includes("openrouter3"), `${source} must not use Nemotron`);
   }
-  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2"]);
-  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3"]);
+  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
+  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
   assert.deepEqual(Array.from(FREE_WRITING_CHAIN), ["gemini", "groq", "groq2", "openrouter", "openrouter2"]);
 });
 
 test("Feed uses free Nemotron after Gemini, then the other free models, and OpenAI last", () => {
   const withFree = gate(ENV, () => ok("x"));
-  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2"]);
+  assert.deepEqual(Array.from(withFree.context.taskProviderOrder("anthropic", task(withFree.context, "feed-post").body)), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
   const paidGeminiOnly = gate({ ...ENV, GEMINI_API_KEY_2: "" }, () => ok("x"));
-  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter3", "openrouter-dm-dolphin", "groq", "groq2"]);
+  assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post").body)), ["openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
   assert.deepEqual(Array.from(paidGeminiOnly.context.taskProviderOrder("anthropic", task(paidGeminiOnly.context, "feed-post", { foreground: true }).body)), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
 });
 
-test("Background request with every free provider rate-limited WAITS: a 503 with Retry-After, no paid call", async () => {
+test("Background request with every provider rate-limited WAITS: a 503 with Retry-After; OpenAI was the last one tried, Mistral never", async () => {
   const { context, calls } = gate(ENV, (provider) => quota(provider));
   const result = await context.executeAITask(task(context, "feed-post"));
   assert.equal(result.ok, false);
@@ -93,23 +99,49 @@ test("Background request with every free provider rate-limited WAITS: a 503 with
   assert.equal(result.waiting, true);
   assert.ok(Number(result.retryAfter) >= 20, "waits at least 20 s, got " + result.retryAfter);
   assert.equal(result.payload.error.type, "free_ai_waiting");
-  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2"]);
-  assert.ok(!calls.includes("openai") && !calls.includes("anthropic") && !calls.includes("mistral"), "paid providers called: " + calls);
+  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
+  assert.ok(!calls.includes("anthropic") && !calls.includes("mistral") && !calls.includes("mistral2"), "billed providers called: " + calls);
 });
 
-test("Background request with no free provider configured waits instead of failing hard", async () => {
+test("The providers of one background request share the app's timeout, so the chain reaches OpenAI before the app stops listening", async () => {
+  const seen = [];
+  const { context } = gate(ENV, (provider, body) => { seen.push([provider, body.timeout_ms]); return quota(provider); });
+  await context.executeAITask(task(context, "feed-post", { timeout_ms: 38000 }));
+  assert.deepEqual(seen.map(([provider]) => provider), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
+  assert.equal(seen[0][1], 17100, "Gemini, first of six, may take less than half");
+  for (const [provider, ms] of seen) assert.ok(ms >= 12000 && ms <= 38000, provider + " " + ms);
+  assert.ok(seen[seen.length - 1][1] >= 12000, "the last one still has the floor");
+  /* a DM, a scene and a careful reading keep their providers' own timeouts */
+  for (const extra of [{ source: "dm", timeout_ms: 48000 }, { source: "scene", timeout_ms: 48000 }, { source: "feed-post", timeout_ms: 90000, quality: "deep" }]) {
+    const kept = [];
+    const g = gate(ENV, (provider, body) => { kept.push(body.timeout_ms); return quota(provider); });
+    await g.context.executeAITask(task(g.context, extra.source, extra));
+    assert.ok(kept.length > 0 && kept.every((ms) => ms === extra.timeout_ms), extra.source + " " + JSON.stringify(kept));
+  }
+  /* no timeout asked: nothing is imposed */
+  const none = [];
+  const g = gate(ENV, (provider, body) => { none.push(body.timeout_ms); return quota(provider); });
+  await g.context.executeAITask(task(g.context, "feed-post"));
+  assert.ok(none.every((ms) => ms === undefined), JSON.stringify(none));
+});
+
+test("Background request with no free provider configured is answered by OpenAI, the last resort; with nothing at all it waits", async () => {
   const { context, calls } = gate({ OPENAI_API_KEY: "oa", OPENROUTER_API_KEY: "", OPENROUTER_API_KEY_2: "", GEMINI_API_KEY: "", GEMINI_API_KEY_2: "" }, () => ok("openai"));
   const result = await context.executeAITask(task(context, "feed-post"));
-  assert.equal(result.waiting, true);
-  assert.equal(result.status, 503);
-  assert.deepEqual(Array.from(calls), []);
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(calls), ["openai"]);
+  const none = gate({ OPENROUTER_API_KEY: "", OPENROUTER_API_KEY_2: "", GEMINI_API_KEY: "", GEMINI_API_KEY_2: "" }, () => ok("x"));
+  const nothing = await none.context.executeAITask(task(none.context, "feed-post"));
+  assert.equal(nothing.waiting, true);
+  assert.equal(nothing.status, 503);
+  assert.deepEqual(Array.from(none.calls), []);
 });
 
 test("A free provider that answers is used normally for background work, and Mistral is never called", async () => {
   const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? quota(provider) : ok(provider)));
   const result = await context.executeAITask(task(context, "group-chat"));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
+  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3"], "OpenRouter takes it right after Gemini");
 });
 
 test("An unprompted (background) DM uses free capacity first, then Venice (R78); a player-waiting DM keeps Dolphin -> Venice -> Mistral 1 -> 2", async () => {
@@ -177,7 +209,8 @@ test("A Gemini 'come back at' still sets how long a waiting background request i
   const spent = (provider) => (provider === "gemini"
     ? { ok: false, status: 429, retryAfter: "1800", payload: { error: { message: "All free Gemini keys are resting" } }, provider }
     : { ok: false, status: 503, payload: { error: { message: "unavailable" } }, provider });
-  const { context } = gate({ ...ENV, GROQ_API_KEY: "", GROQ_API_KEY_2: "" }, spent);
+  /* Gemini is the only provider there is, so its own "come back at" is the wait (the soonest of several would be shorter) */
+  const { context } = gate({ ...ENV, GROQ_API_KEY: "", GROQ_API_KEY_2: "", OPENROUTER_API_KEY: "", OPENROUTER_API_KEY_2: "", OPENAI_API_KEY: "" }, spent);
   const result = await context.executeAITask(task(context, "feed-post"));
   assert.equal(result.waiting, true);
   assert.ok(Number(result.retryAfter) >= 600 && Number(result.retryAfter) <= 900, "uses Gemini's own time, capped at fifteen minutes: " + result.retryAfter);
@@ -259,9 +292,9 @@ test("Everything that gives a character a voice keeps its own chain, Groq only a
   assert.equal(order("dm", { foreground: true })[1], "openrouter-dm-venice");
   assert.equal(order("scene")[0], "openrouter-dm-dolphin");
   for (const source of ["comments", "player-post-comments-isolated"]) assert.equal(order(source)[0], "openrouter-dm-dolphin", source);
-  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2"]);
-  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3"]);
-  assert.deepEqual(order("character-bible"), ["gemini", "groq", "groq2", "openrouter3"]);
+  assert.deepEqual(order("feed-post"), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai"]);
+  assert.deepEqual(order("sheet-summary"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
+  assert.deepEqual(order("character-bible"), ["gemini", "groq", "groq2", "openrouter3", "openai"]);
   for (const source of ["group-chat", "notes", "autonomy-other", "scene-roleplay"]) assert.equal(order(source)[0], "gemini", source + " starts on Gemini");
 });
 
@@ -564,7 +597,7 @@ test("A Gemini safety block hands the request on without resting Gemini, and Gem
   const { context, calls } = gate(ENV, (provider) => (provider === "gemini" ? { ok: false, status: 422, blocked: true, payload: { error: { message: "Gemini blocked the answer (SAFETY)." } }, provider } : text(provider, '{"ok":true}')));
   const result = await context.executeAITask(jsonTask("group-chat"));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(calls), ["gemini", "groq"]);
+  assert.deepEqual(Array.from(calls), ["gemini", "openrouter3"]);
   assert.equal(context.providerCooldownMs("gemini"), 0);
   assert.equal(vm.runInContext("AI_GATE", context).providerConfigurationErrors.has("gemini"), false);
 });
@@ -703,7 +736,7 @@ test("The exact DM chain is not reordered even after repeated Dolphin refusals",
 test("A repeatedly refusing provider is still demoted on reorderable background chains", async () => {
   const { context } = gate(ENV, (provider) => (provider === "gemini" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
   for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("group-chat", { messages: [{ role: "user", content: "w" + i }] }));
-  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("group-chat"))), ["groq", "groq2", "gemini"]);
+  assert.deepEqual(Array.from(context.taskProviderOrder("anthropic", jsonBody("group-chat"))), ["openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "openai", "gemini"]);
 });
 
 test("A provider that refused only now and then stays first on a reorderable chain", async () => {
@@ -718,7 +751,7 @@ test("A provider that refused only now and then stays first on a reorderable cha
 test("A Gemini safety block counts against Gemini for that kind of request, a prose answer to a prose request counts for nothing", async () => {
   const blocked = gate(ENV, (provider) => (provider === "gemini" ? { ok: false, status: 422, blocked: true, payload: { error: { message: "blocked" } }, provider } : text(provider, '{"ok":true}')));
   for (let i = 0; i < 4; i += 1) await blocked.context.executeAITask(jsonTask("group-chat", { messages: [{ role: "user", content: "c" + i }] }));
-  assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("group-chat"))[0], "groq", "Gemini goes to the end for group chats");
+  assert.equal(blocked.context.taskProviderOrder("anthropic", jsonBody("group-chat"))[0], "openrouter3", "Gemini goes to the end for group chats");
   const prose = gate(ENV, (provider) => text(provider, REFUSAL));
   for (let i = 0; i < 6; i += 1) await prose.context.executeAITask({ requestedProvider: "anthropic", source: "dm", body: { source: "dm", foreground: true, system: "narrator", messages: [{ role: "user", content: "p" + i }] } });
   assert.equal(prose.context.taskProviderOrder("anthropic", jsonBody("dm", { foreground: true }))[0], "openrouter-dm-dolphin");

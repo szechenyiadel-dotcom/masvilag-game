@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys,
+  PAID_PROVIDERS, isForegroundRequest, filterProvidersForBody, selectGeminiKeys, mayUsePaidLastResort, providerTimeBudget,
   backgroundWaitSeconds, buildWaitingResult, geminiKeyRestMs, geminiRateLimitInfo, secondsUntilPacificMidnight, planGroqRequest, groqRetryMs, GROQ_FREE_TPM_BUDGET,
   BACKGROUND_WAIT_MIN_SECONDS, BACKGROUND_WAIT_MAX_SECONDS, BACKGROUND_WAIT_DEFAULT_SECONDS,
   GROQ_UTILITY_SOURCES, GROQ_UTILITY_CHAIN, isGroqUtilitySource, estimateGroqTokens, groqCarriesWhole, groqPaceMaxWaitMs, createGroqPacer, GROQ_WINDOW_MS,
@@ -22,7 +22,8 @@ test("Only an explicit foreground flag marks a request as player-waiting", () =>
 
 test("Background requests never get a paid provider; foreground ones keep the whole chain", () => {
   const chain = ["openrouter3", "mistral", "gemini", "openai", "anthropic", "groq"];
-  assert.deepEqual(filterProvidersForBody(chain, { source: "feed-post" }, { freeGeminiKeyCount: 2 }), ["gemini", "groq"], "Mistral is billed per use too");
+  assert.deepEqual(filterProvidersForBody(chain, { source: "feed-post" }, { freeGeminiKeyCount: 2 }), ["openrouter3", "gemini", "groq"], "Mistral is billed per use too");
+  assert.deepEqual(filterProvidersForBody(chain, { source: "feed-post" }, { freeGeminiKeyCount: 2, paidAllowed: ["openai"] }), ["openrouter3", "gemini", "openai", "groq"], "OpenAI only, when it is named as the last resort");
   assert.deepEqual(filterProvidersForBody(chain, { foreground: true }, { freeGeminiKeyCount: 0 }), chain);
   for (const paid of PAID_PROVIDERS) assert.ok(!filterProvidersForBody(chain, {}, { freeGeminiKeyCount: 1 }).includes(paid));
 });
@@ -465,8 +466,8 @@ test("An answer is never mistaken for a refusal: JSON, fenced JSON, long prose, 
 
 /* ---------- the paid providers' ceiling and the usage meter ---------- */
 
-test("The paid providers are DeepSeek and the two Mistral keys, and the ceiling defaults to 60,000 characters", () => {
-  assert.deepEqual([...PAID_INPUT_PROVIDERS].sort(), ["mistral", "mistral2", "openrouter3"]);
+test("The paid providers are the two Mistral keys and the two OpenRouter DM routes, and the ceiling defaults to 60,000 characters", () => {
+  assert.deepEqual([...PAID_INPUT_PROVIDERS].sort(), ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"]);
   assert.equal(DEFAULT_PAID_MAX_INPUT_CHARS, 60000);
   assert.equal(paidMaxInputChars({}), 60000);
   assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "" }), 60000);
@@ -604,4 +605,24 @@ test("Active app language is authoritative across every generated user-visible A
   assert.match(social, /If the active language is English: DMs, Scenes, posts, captions, Notes, comments, replies, group-chat lines, gossip, notifications, summaries, relationship prose/);
   assert.match(social, /Do NOT switch languages merely because the newest player message/);
   assert.match(social, /const combinedPolicy = `\$\{ACTIVE_LANGUAGE_POLICY\}/);
+});
+
+test("Only the writing the world does on its own may end on OpenAI: not popups, invitations, chores, DMs or scenes", () => {
+  for (const source of ["feed-post", "notes", "group-chat", "character-bible", "sheet-summary", "autonomy-other"]) assert.equal(mayUsePaidLastResort(source, false), true, source);
+  for (const source of ["popup", "invite", "ambient-popup", "dm", "scene"]) assert.equal(mayUsePaidLastResort(source, false), false, source);
+  assert.equal(mayUsePaidLastResort("display-translate", true), false, "a chore with a free chain of its own");
+});
+
+test("A chain shares the app's timeout: a slow first provider cannot leave the next ones no time, the last gets what is left", () => {
+  const budget = 38000;
+  const first = providerTimeBudget({ budgetMs: budget, elapsedMs: 0, providersLeft: 4, isFirst: true });
+  assert.equal(first, 17100, "Gemini, the first, takes less than half");
+  const second = providerTimeBudget({ budgetMs: budget, elapsedMs: 17100, providersLeft: 3, isFirst: false });
+  assert.ok(second >= 12000 && second <= 20900 * 0.6 + 1, "the next gets its share of what is left: " + second);
+  assert.equal(providerTimeBudget({ budgetMs: budget, elapsedMs: 30000, providersLeft: 2, isFirst: false }), 12000, "never less than the floor");
+  assert.equal(providerTimeBudget({ budgetMs: 90000, elapsedMs: 5000, providersLeft: 3, isFirst: false }), 15000, "a provider in the middle never takes more than the cap");
+  assert.equal(providerTimeBudget({ budgetMs: 90000, elapsedMs: 0, providersLeft: 3, isFirst: true }), 40500, "the first is not capped that way");
+  assert.equal(providerTimeBudget({ budgetMs: budget, elapsedMs: 20000, providersLeft: 0, isFirst: false }), 18000, "the last one gets everything that is left");
+  assert.equal(providerTimeBudget({ budgetMs: budget, elapsedMs: 36000, providersLeft: 0, isFirst: false }), 12000, "and at least the floor");
+  assert.equal(providerTimeBudget({ budgetMs: 0, elapsedMs: 0, providersLeft: 3, isFirst: true }), 0, "no budget: the provider keeps its own timeout");
 });

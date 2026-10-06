@@ -367,7 +367,8 @@ test("Invalid Gemini JSON can be normalized by OpenAI without changing semantic 
   if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
   calls.push("openai"); return response({ ok: true });
  };
- const result = await analyzeStructured("Complete source", { type: "object" }, value => assert.equal(value.ok, true), { candidates: [semantic], schemaCandidates: [schemaRepair], transport, outputTokens: 1000 });
+ /* only an answer that is the wrong shape is worth a repair (a wrong value is not), so the validator says so the way the real ones do */
+ const result = await analyzeStructured("Complete source", { type: "object" }, value => { if (value.ok !== true) throw new Error("invalid type: ok"); }, { candidates: [semantic], schemaCandidates: [schemaRepair], transport, outputTokens: 1000 });
  assert.deepEqual(calls, ["gemini", "openai"]);
  assert.equal(result.provider, "gemini"); assert.equal(result.formatterProvider, "openai");
 });

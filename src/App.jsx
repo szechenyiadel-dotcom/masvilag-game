@@ -9418,7 +9418,9 @@ async function askJSON(system, prompt, options = {}) {
             : "KIZÁRÓLAG érvényes JSON-t adj vissza. Adj meg egy legfelső \"language\" mezőt \"hu\" értékkel.";
           const perfRule = options && options.quality === "deep"
             ? "THOROUGHNESS: completeness and accuracy matter more than brevity. Use the full length the schema allows. No text outside the JSON."
-            : "PERFORMANCE: Be concise. Do not add explanations outside the requested JSON. Return the smallest complete valid JSON that satisfies the schema.";
+            : (options && options.source === "dm"
+              ? "PERFORMANCE: no text outside the requested JSON and no empty optional fields' explanations — but the \"reply\" text itself is never shortened at the cost of its feeling: it is written fully alive."
+              : "PERFORMANCE: Be concise. Do not add explanations outside the requested JSON. Return the smallest complete valid JSON that satisfies the schema.");
           const sys = `${langRule}\n\n${jsonRule}\nNo markdown fences.\n\n${perfRule}\n\n${system}`;
           const hint = tries === 0
             ? ""
@@ -37830,6 +37832,42 @@ function directDmEmotionTrigger(w, c, latestText) {
   return (en ? "EMOTIONAL TRIGGER IN THE PLAYER'S MESSAGE:\n" : "ÉRZELMI KIVÁLTÓ A JÁTÉKOS ÜZENETÉBEN:\n") + nickLine + rows.join("\n") + "\n\n";
 }
 
+/* The feeling a DM reply has to carry, stated from the real record (mood, bond levels, what is hidden), and the rules
+   that make it show. Without it the small models wrote correct, flat lines: facts and banter with nobody behind them. */
+function directDmFeelingBlock(w, c) {
+  try {
+    if (!w || !c) return "";
+    const player = (w.player && w.player.name) || "the player";
+    const rel = getRel(w, c.id, w.meId) || EMPTY_REL;
+    const self = (w.charMemory && w.charMemory[c.id] && w.charMemory[c.id].selfState) || {};
+    const levels = rel.levels || {};
+    const num = (value) => (value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value)) ? Math.round(Number(value)) : null);
+    const scale = (label, value) => (value === null ? "" : label + " " + (value > 0 && label === "warmth" ? "+" : "") + value);
+    const clip = (value, max) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+    const parts = [
+      self.mood ? "your mood: " + clip(self.mood, 120) : "",
+      rel.bond || rel.type ? "bond: " + clip(localizedBond(rel.bond || rel.type, worldLanguage(w, w.meId) === "en" ? "en" : "hu"), 80) : "",
+      scale("warmth", num(rel.score ?? levels.sentiment)),
+      scale("trust", num(rel.trust ?? levels.trust)),
+      scale("attraction", num(rel.attraction ?? levels.attraction)),
+      scale("tension", num(rel.tension ?? levels.tension)),
+      rel.mood ? "how it shows: " + clip(rel.mood, 120) : "",
+    ].filter(Boolean);
+    const hidden = clip(rel.hiddenFeelings || rel.hidden, 260);
+    if (!parts.length && !hidden) return "";
+    return "HOW YOU FEEL ABOUT " + player.toUpperCase() + " RIGHT NOW — the feeling underneath your words (from the record, not to be quoted):\n" +
+      parts.join(" · ") + "\n" + (hidden ? "What you keep hidden from " + player + ": " + hidden + "\n" : "") + "\n";
+  } catch (error) { return ""; }
+}
+
+const DIRECT_DM_EMOTION_RULES =
+  "EMOTIONAL TRUTH — HARD RULE FOR THIS REPLY:\n" +
+  "- A reply that only states a fact, throws a quip with nothing behind it or comments on the situation from the outside is WRONG. Every reply carries a real feeling that belongs to THIS moment between you two (your feelings above, what just happened, the history of this DM): hurt, relief, jealousy, hunger, irritation, tenderness, fear of losing them, pride, longing, embarrassment — whatever is true for YOU now.\n" +
+  "- Read the SUBTEXT of the player's line, not only its words. A cold or short answer (\"ok\", \"what xd\", \"k\", \"lol\") means distance, boredom, hurt, a test or a brush-off: react to THAT the way someone who feels what you feel would — push back, needle, soften, get a little hurt, get possessive or jealous if your nature does. Never carry on as if the line had been warm.\n" +
+  "- Show it the way YOUR character does (the voice card decides): blunt people get blunter and more personal, shy ones go awkward and soft, cocky ones cut closer to the bone, sweet ones open up. A guarded or player type does not give speeches about feelings — it shows in what they notice, what they will not let go of, the jab that is a little too accurate, the line that comes one beat too fast.\n" +
+  "- Make it personal and concrete: pick up a detail of what the player just said or did, or of your shared history, and say what it did to YOU. No filler (\"huh\", \"classic\", \"whatever\", \"interesting\") standing in for a reaction.\n" +
+  "- Length follows the feeling: one or two sentences for light banter, three or four when something real is at stake. A bare one-liner is wrong when the player has handed you an emotional opening.\n\n";
+
 function directDmProtectedTail(w, c, ck, latestText) {
   const history = directDmProtectedHistory(w, c, ck);
   const ownRecent = directDmOwnRecent(w, c, ck);
@@ -37867,6 +37905,8 @@ function directDmProtectedTail(w, c, ck, latestText) {
     emotionTrigger +
     fakeDatingLane +
     directDmLastExchangeBlock(w, c, ck, latest) +
+    directDmFeelingBlock(w, c) +
+    DIRECT_DM_EMOTION_RULES +
     "AMIRE MOST VÁLASZOLNOD KELL (SZÓ SZERINT):\n" +
     latest;
 }
