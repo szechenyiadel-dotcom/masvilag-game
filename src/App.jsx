@@ -8773,7 +8773,24 @@ function roleplayLatestBeatTail(w, turns, playerText, who) {
           ? playerName + "'s NEWEST action/words (answer exactly this, its content and intent; do not answer an older line instead):\n\"" + newest + "\""
           : playerName + " LEGÚJABB cselekvése/mondata (pontosan erre felelj, a tartalmára és a szándékára; ne egy régebbi sorra):\n\"" + newest + "\"")
       : (en ? "The player does not act now; continue from the newest line above." : "A játékos most nem lép; a fenti legújabb sorból folytasd.")) +
-    "\n===";
+    "\n===" + roleplayReplyRules(en);
+}
+
+/* What the smaller models that write a scene kept getting wrong: lines that did not answer what the player had just said,
+   people and events that are nowhere in the scene ("a friend", "her"), and speeches. The newest moment is followed by
+   these rules, in the part of the prompt that is never cut. */
+function roleplayReplyRules(en) {
+  return en
+    ? "\nMAKE SENSE — HARD RULES FOR THIS TURN:\n" +
+      "- Answer what the player just said or did, directly and in character: its literal content and intent first, then your own addition. If they asked something, answer it (or refuse it in a way that tells them something).\n" +
+      "- Stay inside this scene: its place, its goal, the people in the cast and what really happened in the turns above. Never bring in a person, a place or an event that is not there (\"a friend\", \"her\", \"because of what happened\") and never answer as if the scene were about something else.\n" +
+      "- Say something concrete: an answer, a decision, a reaction to a specific detail, a feeling that fits the moment. No riddles, no abstract speeches about games, types or outcomes.\n" +
+      "- Short: one to three sentences of speech and at most one action beat, unless the player's line really calls for more. Every sentence must be something the other person can understand and respond to.\n"
+    : "\nÉRTELMES LEGYEN — KEMÉNY SZABÁLYOK ERRE A KÖRRE:\n" +
+      "- Arra felelj, amit a játékos épp mondott vagy tett, közvetlenül és a karakterben: előbb a szó szerinti tartalma és a szándéka, aztán a saját hozzátéved. Ha kérdezett, válaszolj rá (vagy úgy utasítsd el, hogy az is mondjon valamit).\n" +
+      "- Maradj ebben a jelenetben: a helyszínében, a céljában, a szereplőkben és abban, ami a fenti körökben tényleg megtörtént. Ne hozz be olyan személyt, helyet vagy eseményt, ami nincs benne (\"egy barát\", \"ő\", \"ami történt miatt\"), és ne úgy válaszolj, mintha a jelenet másról szólna.\n" +
+      "- Mondj valami konkrétat: választ, döntést, reakciót egy részletre, a pillanathoz illő érzést. Se rejtvény, se elvont szónoklat játékokról, típusokról vagy kimenetelről.\n" +
+      "- Röviden: egy-három mondat beszéd és legfeljebb egy mozdulat, hacsak a játékos sora tényleg nem kér többet. Minden mondat olyan legyen, amit a másik megért és amire válaszolhat.\n";
 }
 
 function preserveEdges(value, maxChars, label = "context") {
