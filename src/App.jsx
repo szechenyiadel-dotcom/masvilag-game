@@ -3793,6 +3793,30 @@ function stripForeignGroupClaims(w, speakerId, text) {
    with — or possessive / obsessed about — that person. A friend who repeats the
    possessive line of someone else in the thread loses that sentence. */
 const POSSESSIVE_CLAIM_RE = /\b(?:(?:she|he)(?:'s| is) mine|(?:what|who)(?:'s| is) mine|you don'?t touch what'?s mine|my (?:girl|boy|woman|man|girlfriend|boyfriend|babe)\b|mine\.?$|back off,? (?:she|he)(?:'s| is) (?:mine|taken))|(?:az eny[eé]m|a cs[aá]jom|a pasim|a bar[aá]tn[oő]m\b|az [eé]n (?:cs[aá]jom|pasim|l[aá]nyom))/i;
+/* R99 (owner's rule): in a fake-dating pair the deal stays the deal — a line that pushes to make it real
+   ("I'll win you over without the act", "wanna see where it goes?", "commit for real") is taken out, and a
+   fuckboy / player type answers short (at most three sentences), not with a love monologue. */
+const FAKE_DATING_PUSH_RE = /without the act|make (?:it|this|us) real|for real\b|see where (?:it|this) goes|win you over|not (?:just )?(?:an? |the )?act\b|(?:it'?s|this is) not fake|not fake (?:for|to) me|real (?:girlfriend|boyfriend|thing|couple|relationship)|\bcommit\b|be mine|more than (?:an? |the )?act|i mean (?:it|every word)|not faking|who (?:the (?:fuck|hell) )?knows\?|play for keeps|igazából|komolyan gondolom|nem (?:csak )?(?:színjáték|kamu)|legyen igazi|vállald/i;
+function keepFakeDatingLane(w, speakerId, targetId, text) {
+  const value = String(text || "").trim();
+  if (!w || !speakerId || !targetId || !value) return value;
+  let card = "";
+  try { card = fakeDatingBehaviorCard(w, speakerId, targetId); } catch (error) { card = ""; }
+  if (!card) return value;
+  const parts = value.split(/(?<=[.!?…])\s+/).filter(Boolean);
+  let kept = parts.filter((part) => !FAKE_DATING_PUSH_RE.test(part));
+  let guarded = false;
+  try { guarded = Boolean(playerTypeDirective(w, charById(w, speakerId))) || /admitting real feelings is the LAST thing|az érzéseid bevallása az utolsó/.test(card); } catch (error) { guarded = false; }
+  if (guarded && kept.length > 3) kept = kept.slice(0, 3);
+  if (!kept.length) {
+    const en = worldLanguage(w, w && w.meId) === "en";
+    kept = [en ? "Relax. It's an act, and I'm very good at it." : "Nyugi. Ez szerep, és nagyon jól csinálom."];
+  }
+  const out = kept.join(" ").trim();
+  if (out !== value) console.info("[fake-dating] kept the deal: removed a push to make it real / cut a monologue", "speaker=" + speakerId, value.slice(0, 120));
+  return out;
+}
+
 function stripUnfoundedPossessiveClaims(w, speakerId, text) {
   const value = String(text || "");
   const straight = (x) => String(x || "").replace(/[’‘]/g, "'");
@@ -38599,7 +38623,7 @@ Formátum:
         : ""
     ).trim();
     /* R89: a DM reply is a text message — roleplay narration only when the player writes *roleplay* themselves */
-    const requestedReplyText = /\*[^*]+\*/.test(String(t || "")) ? requestedReplyRaw : stripSocialRoleplayNarration(w, c.id, requestedReplyRaw);
+    const requestedReplyText = keepFakeDatingLane(w, c.id, w.meId, /\*[^*]+\*/.test(String(t || "")) ? requestedReplyRaw : stripSocialRoleplayNarration(w, c.id, requestedReplyRaw));
     if (out && out.reply !== undefined && requestedReplyText !== requestedReplyRaw) out.reply = requestedReplyText;
 
     const explicitImageRequest =
@@ -57484,7 +57508,7 @@ if (targetNote) {
         bot.id,
         /* R89: an unprompted DM is a text message, never roleplay narration */
         out && out.text
-          ? fixFollowDirection(dmTriggerNow, stripSocialRoleplayNarration(view, bot.id, String(out.text).trim()))
+          ? keepFakeDatingLane(view, bot.id, view.meId, fixFollowDirection(dmTriggerNow, stripSocialRoleplayNarration(view, bot.id, String(out.text).trim())))
           : "",
         280
       );
@@ -63850,7 +63874,13 @@ function fullSpecPendingStillValid(w,row){if(!w||!row||!row.botId||!charById(w,r
 /* R71 (owner's rule): an unprompted DM always comes when the player asked for it in the comments ("text me"),
    did not follow back, or unfollowed the character — and from every other reason (gossip, jealousy, being
    ignored, a tag, ...) at most ONE in a rolling hour. Over that budget the other DM simply does not happen. */
-const DM_ALWAYS_ALLOWED_TRIGGER_RE = /^(?:comment-dm-|follow-not-returned$|player-unfollowed$|popup-)/;
+/* R99 (owner's rule): only "text me", no follow-back and unfollow are outside the daily budget — a popup's follow-up DM
+   counts as the one ordinary DM of the day like everything else */
+const DM_ALWAYS_ALLOWED_TRIGGER_RE = /^(?:comment-dm-|follow-not-returned$|player-unfollowed$)/;
+/* R99: follow / unfollow DMs come one at a time (never a wave of them at once), and one character asks about the
+   same missing follow-back only once a week */
+const FOLLOW_DM_SPACING_MS = 3 * 3600e3;
+const FOLLOW_DM_PER_CHARACTER_MS = 7 * 24 * 3600e3;
 /* R93 (owner's rule): every other unprompted DM — at most ONE a day (rolling 24 hours). */
 const OTHER_DM_HOURLY_MAX = 1;
 const OTHER_DM_WINDOW_MS = 24 * 3600e3;
@@ -65172,6 +65202,8 @@ function fixFollowDirection(trigger, value) {
   return text
     .replace(/\b(Y|y)ou followed me\b/g, (m, y) => (y === "Y" ? "I" : "I") + " followed you")
     .replace(/\b(Y|y)ou(?:'ve| have) followed me\b/g, () => "I followed you")
+    .replace(/\bI see you followed me\b/gi, "I followed you")
+    .replace(/\b(?:Y|y)ou(?:'re| are)? following me\b/g, "I'm following you")
     .replace(/\bBekövettél\b/g, "Bekövettelek").replace(/\bbekövettél\b/g, "bekövettelek")
     .replace(/\bKövettél\b/g, "Bekövettelek").replace(/\bkövettél be\b/g, "bekövettelek");
 }
@@ -65268,6 +65300,13 @@ function groundedDueFollowBackAction(w) {
         row.lastDeferredLogAt = now();
         groundedEventLog(w, rowTrigger, "deferred", "DM to the player deferred (" + followPause + "); it will be sent afterwards.", "follow:" + row.botId + ">" + row.humanId);
       }
+      continue;
+    }
+    /* R99: one follow/unfollow DM at a time — the next one waits a few hours (it is cancelled if the player follows back meanwhile) */
+    if (now() - (Number(state.lastFollowDmAt) || 0) < FOLLOW_DM_SPACING_MS) continue;
+    if (rowTrigger !== "player-unfollowed" && now() - (Number(state.followBackDmSent && state.followBackDmSent[row.botId]) || 0) < FOLLOW_DM_PER_CHARACTER_MS) {
+      delete state.pendingFollowBack[row.botId];
+      groundedEventLog(w, "follow-not-returned", "skipped", nameOfIn(w, row.botId) + " already asked about the follow-back this week.", "follow:" + row.botId + ">" + row.humanId);
       continue;
     }
     if (rowTrigger === "player-unfollowed") {
@@ -66456,6 +66495,10 @@ async function runSimulationAction(view, update, action, addImage) {
       if (result && result !== "dm-deferred") {
         delete state.pendingFollowBack[botId];
         const doneTrigger = String(action.payload.trigger || "follow-not-returned");
+        /* R99: remember it, so the next follow DM waits and this character does not ask again this week */
+        state.lastFollowDmAt = now();
+        if (!state.followBackDmSent || typeof state.followBackDmSent !== "object") state.followBackDmSent = {};
+        if (doneTrigger !== "player-unfollowed") state.followBackDmSent[botId] = now();
         groundedEventLog(n, doneTrigger, "success", doneTrigger === "player-unfollowed" ? "Unfollow reaction DM generated." : "Unreturned-follow DM generated.", "follow:" + botId + ">" + String(n.meId || ""));
       } else {
         groundedFollowBackAttemptFailed(n, botId, result === "dm-deferred" ? "deferred" : "no message returned");
