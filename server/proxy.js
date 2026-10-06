@@ -5241,7 +5241,8 @@ function providerModel(provider, body = {}) {
     return String(process.env.OPENROUTER_GEMMA_MODEL || "google/gemma-4-31b-it:free").trim();
   }
   if (provider === "openrouter-dm-venice") {
-    return "cognitivecomputations/dolphin-mistral-24b-venice-edition";
+    /* The paid OpenRouter route of DMs and scenes. OPENROUTER_DM_PAID_MODEL puts a stronger model in this slot. */
+    return String(process.env.OPENROUTER_DM_PAID_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition").trim();
   }
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-super-120b-a12b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
@@ -5705,22 +5706,17 @@ function taskProviderOrder(requestedProvider, body) {
     /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
     if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
-    /* A reply the player is waiting on: Mistral first (Medium, on the paid keys) — the small free/uncensored models
-       (Gemma is rate-limited most of the time, Dolphin-Mistral 24B on Venice answered nearly every DM) wrote plain,
-       incoherent lines. A refusal or an outage still falls through, to the uncensored routes: Gemma, then Venice. */
-    raw = ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"];
+    /* A reply the player is waiting on: OpenRouter first (Gemma, free; then the paid OpenRouter route), then Mistral 1 and 2
+       (the owner's rule: OpenRouter is the first paid provider, never Mistral). */
+    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
        waiting on it (reroll / own answer). */
     /* R85 (owner's rule): popups never use a paid provider, not even when the player is waiting */
     raw = ["gemini", "groq", "groq2", "openrouter3"];
   } else if (source === "scene") {
-    /* A scene turn the player waits on: Mistral first (Medium) — Gemma is rate-limited most of the time and the Venice
-       Dolphin-Mistral 24B wrote lines that did not follow the scene (and often no JSON at all, which cost a second
-       call). A scene the world writes on its own keeps Dolphin (Gemma) -> Venice -> Mistral 1 -> Mistral 2. */
-    raw = playerWaiting
-      ? ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"]
-      : ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
+    /* Scenes: Dolphin (OpenRouter key 1, Gemma) -> the paid OpenRouter route -> Mistral 1 -> Mistral 2. */
+    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (isComment) {
     /* Comments — the ones the player waits for and the background ones alike: Dolphin (OpenRouter key 1) ->
        Nemotron :free -> the free Gemini keys -> paid OpenAI -> paid Venice (OpenRouter key 2). */
