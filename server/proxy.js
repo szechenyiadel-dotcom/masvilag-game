@@ -5225,7 +5225,7 @@ function providerModel(provider, body = {}) {
     const source = String(body?.source || "").trim().toLowerCase();
     if (source === "scene") return String(process.env.MISTRAL_SCENE_MODEL || "mistral-small-latest").trim();
     if (source === "comments" || /(?:^|[-_])comments?(?:[-_]|$)/.test(source) || source.includes("player-post-comment")) return String(process.env.MISTRAL_COMMENT_MODEL || "mistral-small-latest").trim();
-    if (source === "dm") return String(process.env.MISTRAL_DM_FALLBACK_MODEL || "mistral-small-latest").trim();
+    if (source === "dm") return String(process.env.MISTRAL_DM_MODEL || process.env.MISTRAL_DM_FALLBACK_MODEL || "mistral-medium-latest").trim();
     if (String(body?.quality || "") === "deep") return String(process.env.MISTRAL_DEEP_MODEL || "mistral-large-latest").trim();
     if ((Number(body?.priority) || 0) >= 50) return String(process.env.MISTRAL_PLAYER_MODEL || "mistral-medium-latest").trim();
     return MISTRAL_MODEL || "";
@@ -5705,8 +5705,10 @@ function taskProviderOrder(requestedProvider, body) {
     /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
     if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
-    /* DM chain is exact: Dolphin key 1 -> Venice Uncensored key 2 -> Mistral 1 -> Mistral 2. */
-    raw = ["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"];
+    /* A reply the player is waiting on: Mistral first (Medium, on the paid keys) — the small free/uncensored models
+       (Gemma is rate-limited most of the time, Dolphin-Mistral 24B on Venice answered nearly every DM) wrote plain,
+       incoherent lines. A refusal or an outage still falls through, to the uncensored routes: Gemma, then Venice. */
+    raw = ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"];
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
        waiting on it (reroll / own answer). */
