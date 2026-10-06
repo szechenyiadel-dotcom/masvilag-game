@@ -26,13 +26,38 @@ export function isForegroundRequest(body) {
   return Boolean(body) && body.foreground === true;
 }
 
+/* What the world may write on its own when every free provider is spent or busy: Gemini, then OpenRouter, and OpenAI
+   as the very last one (the owner's rule). Not for popups and invitations (never paid), nor for the analysis and
+   translation chores that run constantly and have free chains of their own. */
+export const PAID_LAST_RESORT_PROVIDERS = Object.freeze(["openai"]);
+export function mayUsePaidLastResort(source, isUtility = false) {
+  const kind = String(source || "").trim().toLowerCase();
+  if (isUtility) return false;
+  return !/popup|invite/.test(kind) && kind !== "dm" && kind !== "scene";
+}
+
 export function filterProvidersForBody(providers, body, options = {}) {
   const list = Array.isArray(providers) ? providers : [];
   if (isForegroundRequest(body) || options.allowPaidBackground === true) return list.slice();
   const freeGeminiKeys = Number(options.freeGeminiKeyCount) || 0;
+  const paidAllowed = new Set(Array.isArray(options.paidAllowed) ? options.paidAllowed : []);
   return list.filter((provider) =>
-    !PAID_PROVIDERS.has(provider) && (provider !== "gemini" || freeGeminiKeys > 0)
+    (!PAID_PROVIDERS.has(provider) || paidAllowed.has(provider)) && (provider !== "gemini" || freeGeminiKeys > 0)
   );
+}
+
+/* One request walks a chain of providers, but the app that asked gives up after its own timeout. The chain gets that
+   time as ONE budget: each provider, while others follow it, may take a share of what is left (never less than the
+   floor), so the next provider is reached before the app stops listening. The last one gets all that is left. */
+export function providerTimeBudget({ budgetMs, elapsedMs, providersLeft, isFirst, floorMs = 12000, middleCapMs = 15000 }) {
+  const budget = Number(budgetMs) || 0;
+  if (!(budget > 0)) return 0;   /* no budget (a careful reading, or the caller did not say): the provider keeps its own timeout */
+  const remaining = Math.max(0, budget - Math.max(0, Number(elapsedMs) || 0));
+  if (!(providersLeft > 0)) return Math.max(floorMs, remaining);
+  /* The free models in the middle of a chain either answer within a few seconds or hang until their timeout: none of
+     them is given more than the cap, so a chain of three slow ones does not eat the whole budget. */
+  const share = Math.floor(remaining * (isFirst ? 0.45 : 0.6));
+  return Math.max(floorMs, Math.min(remaining, share, isFirst ? Infinity : middleCapMs));
 }
 
 /* Which Gemini keys a request may try, in order, and how long to wait if none is usable. */
