@@ -376,7 +376,7 @@ async function repairStructuredOutput(raw, originalPrompt, schema, validate, opt
     if (ledger && candidate.name === "gemini" && ledger.restMs(candidate.key, candidate.model) > 0) continue;
     /* The paid repair is asked once per analysis, not once per semantic candidate: a reading that no repair can fix
        must not run up a paid call for every model and key it passes through. */
-    if (candidate.name === "openai") {
+    if (candidate.name === "openai" || candidate.name === "venice") {
       if (paidRepairs.left <= 0) {
         failures.push({ phase: "schema-repair", provider: candidate.name, model: candidate.model, keySlot: candidate.keySlot, status: null, transient: false, reason: "paid repair already tried once for this reading" });
         continue;
