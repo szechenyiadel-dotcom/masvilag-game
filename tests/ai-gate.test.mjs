@@ -1093,3 +1093,16 @@ test("R108: an answer that drifts into a script the request never used goes to t
   assert.equal(context.stripForeignScriptWords(english, '{"reply":"ոթrench bitch, mind your own business."}'), '{"reply":" bitch, mind your own business."}');
   assert.match(source, /\[ai-gate\] foreign-script/);
 });
+
+test("R116: a request the player waits on always finds a gate slot; background fills at most all-but-one", () => {
+  const context = vm.createContext({ AI_GATE: { active: 0, activeBackground: 0 }, AI_GATE_MAX_CONCURRENT: 3, Number, Math });
+  vm.runInContext(pick(["AI_GATE_INTERACTIVE_PRIORITY", "aiGateTaskIsInteractive", "aiGateSlotFree"]), context);
+  const bg = { priority: 60 }, scene = { priority: 100 };
+  context.AI_GATE.active = 2; context.AI_GATE.activeBackground = 2;
+  assert.equal(context.aiGateSlotFree(bg), false, "two background calls running: the third regular slot stays free");
+  assert.equal(context.aiGateSlotFree(scene), true);
+  context.AI_GATE.active = 3; context.AI_GATE.activeBackground = 2;
+  assert.equal(context.aiGateSlotFree(scene), true, "a waiting player may use one extra slot");
+  context.AI_GATE.active = 4;
+  assert.equal(context.aiGateSlotFree(scene), false);
+});
