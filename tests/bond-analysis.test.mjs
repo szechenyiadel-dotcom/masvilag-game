@@ -503,7 +503,7 @@ test("Restart works from the latest live world, installs the analysis there, and
  const start = source.indexOf("const restartWorldHistory = async () => {");
  assert.ok(start >= 0);
  const block = source.slice(start, source.indexOf("\n  };", start));
- const order = ["update(n => { fresh = cloneWorldState(n); })", "analysisReady(fresh, allSubjects)", "await rebuildBondGraph(fresh", "installBondGraph(n, result, allSubjects)", "restartWorldHistoryInPlace(fresh)", "serverSaveWorld(fresh, { bondReset: true })"].map(part => block.indexOf(part));
+ const order = ["update(n => { fresh = cloneWorldState(n); })", "analysisReady(fresh, allSubjects)", "const analysis = rebuildBondGraph(fresh", "installBondGraph(n, result, allSubjects)", "restartWorldHistoryInPlace(fresh)", "serverSaveWorld(fresh, { bondReset: true })"].map(part => block.indexOf(part));
  assert.ok(order.every(index => index >= 0), "missing step: " + order);
  assert.deepEqual([...order].sort((a, b) => a - b), order, "steps are out of order");
  assert.ok(!/force:\s*true/.test(block), "Restart must reuse the server cache, never force a full re-read");
@@ -511,6 +511,9 @@ test("Restart works from the latest live world, installs the analysis there, and
  assert.ok(block.includes("error?.status !== 409"), "a save conflict means: take the newest world and redo");
  assert.ok(block.includes("bondAnalysisBusy.add(w.code)") && block.includes("bondAnalysisBusy.delete(w.code)"));
  assert.ok(block.includes("setErr(") && block.indexOf("setErr(") < block.indexOf("bondRestartBusy.add(w.code)"), "a click ignored because a restart is running must say so");
+ /* R111: a reading that makes no progress does not freeze the restart */
+ assert.ok(block.includes("Promise.race([analysis, stalled])") && block.includes("analysisDeferred = true"), "a stalled reading lets the restart go on");
+ assert.match(source, /const RESTART_ANALYSIS_STALL_MS = 75000;/);
 });
 
 test("A restart the rules reject is answered 422 with the reason, never a retried 500", () => {

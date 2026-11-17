@@ -19677,6 +19677,9 @@ function sysLangText(w, playerId, hu, en) {
 const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";
 /* R108: when this bundle was built (shown in the header), so a phone that still runs an old version can be told apart */
 const BUILD_STAMP = typeof __BUILD_STAMP__ !== "undefined" ? "build " + __BUILD_STAMP__ : "";
+/* R111: how long a world restart waits on a relationship reading that makes no progress before it restarts anyway */
+const RESTART_ANALYSIS_STALL_MS = 75000;
+const RESTART_ANALYSIS_STALLED = Symbol("restart-analysis-stalled");
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -40480,20 +40483,44 @@ function LegacyGroundedWorld({ w, update, onLeave, onDeleteAccount, setErr, onRo
       // private copy); and if the world moved or sheets changed, the next pass simply
       // repeats against the newer state (reading is cached, so that is cheap).
       let saved = null;
+      /* R111: the restart never freezes on the relationship reading. When it makes no progress for a while (free AI
+         quotas spent, models busy), the world restarts anyway and the last readings finish in the background — the
+         server keeps working on them and the app installs them when they are ready. */
+      let analysisDeferred = false;
       for (let pass = 0; pass < 4 && !saved; pass += 1) {
         let fresh = null;
         update(n => { fresh = cloneWorldState(n); });
         if (!fresh) throw new Error(tt("A világ nem érhető el.", "The world is not available."));
 
-        if (!analysisReady(fresh, allSubjects)) {
-          const result = await rebuildBondGraph(fresh, {
+        if (!analysisDeferred && !analysisReady(fresh, allSubjects)) {
+          let lastProgressAt = Date.now();
+          let lastLabel = "";
+          const analysis = rebuildBondGraph(fresh, {
             subjects: allSubjects,
             api: apiJson,
             language: worldLanguage(fresh),
-            progress: ({ phase, completed, total }) => setRestartProgress(
-              (phase === "profile" ? tt("Lapok olvasása", "Reading sheets") : tt("Kapcsolatok", "Relationships")) + " " + completed + "/" + total
-            ),
+            progress: ({ phase, completed, total }) => {
+              lastProgressAt = Date.now();
+              lastLabel = (phase === "profile" ? tt("Lapok olvasása", "Reading sheets") : tt("Kapcsolatok", "Relationships")) + " " + completed + "/" + total;
+              setRestartProgress(lastLabel);
+            },
           });
+          let stallTimer = null;
+          const stalled = new Promise((resolve) => {
+            stallTimer = setInterval(() => {
+              if (Date.now() - lastProgressAt >= RESTART_ANALYSIS_STALL_MS) resolve(RESTART_ANALYSIS_STALLED);
+            }, 2000);
+          });
+          let result;
+          try { result = await Promise.race([analysis, stalled]); }
+          finally { clearInterval(stallTimer); }
+          if (result === RESTART_ANALYSIS_STALLED) {
+            analysisDeferred = true;
+            analysis.catch(() => {});
+            console.info("[restart] relationship reading stalled at", lastLabel || "start", "— restarting now, the rest finishes in the background");
+            setRestartProgress((lastLabel ? lastLabel + " · " : "") + tt("a többi a háttérben készül el", "the rest finishes in the background"));
+            continue;
+          }
           update(n => {
             try { installBondGraph(n, result, allSubjects); }
             catch (error) { console.warn("[restart-bond-install]", error.message); }
