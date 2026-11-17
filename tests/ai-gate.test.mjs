@@ -28,7 +28,7 @@ const NAMES = [
   "extractText", "proxyErrorMessage", "configuredAIProvider", "aiRequestText", "aiRequestChars", "inferAIRequestSource",
   "providerAllowedForBody", "taskProviderOrder", "healthyProvider", "providerCooldownMs", "providerModel", "parseRetryAfterMs",
   "safeProviderMessage", "markProviderFailure", "markProviderSuccess", "summarizeProviderFailures", "logFullAIPromptDebug",
-  "shouldUseEmergencyOpenAIFallback", "answerText", "executeAITask", "upstreamTimeoutFor", "AI_UPSTREAM_TIMEOUT_MS",
+  "shouldUseEmergencyOpenAIFallback", "answerText", "FOREIGN_SCRIPTS", "foreignScriptLeak", "stripForeignScriptWords", "executeAITask", "upstreamTimeoutFor", "AI_UPSTREAM_TIMEOUT_MS",
   "OPENROUTER_FREE_WARNED", "openRouterFreeModel",
 ];
 
@@ -1078,4 +1078,18 @@ test("R107: one OpenRouter key is enough for every OpenRouter slot, and the same
   }
   const { context } = gate({ ...ENV, OPENROUTER_API_KEY: "", OPENROUTER_API_KEY_2: "" }, () => ok("x"));
   for (const provider of ["openrouter-dm-dolphin", "openrouter-dm-venice", "openrouter3"]) assert.equal(context.configuredAIProvider(provider), false, provider);
+});
+
+test("R108: an answer that drifts into a script the request never used goes to the next provider", () => {
+  const context = vm.createContext({ String, RegExp, Object });
+  vm.runInContext(pick(["FOREIGN_SCRIPTS", "foreignScriptLeak", "stripForeignScriptWords"]), context);
+  const english = "Write the feed for an English world. ".repeat(20);
+  const leak = context.foreignScriptLeak(english, '{"text":"Gotta stay on top # পাওয়া #UniversityLife # отримав"}');
+  assert.equal(leak && leak.script, "Cyrillic".length ? leak.script : "", "a leak is reported");
+  assert.ok(["Cyrillic", "Indic"].includes(leak.script));
+  assert.equal(context.foreignScriptLeak(english, '{"text":"Héja, ez magyar és ékezetes 😘"}'), null, "Latin accents and emoji are fine");
+  const korean = english + "한국어 ".repeat(10);
+  assert.equal(context.foreignScriptLeak(korean, '{"text":"안녕"}'), null, "a script the request itself uses is allowed");
+  assert.equal(context.stripForeignScriptWords(english, '{"reply":"ոթrench bitch, mind your own business."}'), '{"reply":" bitch, mind your own business."}');
+  assert.match(source, /\[ai-gate\] foreign-script/);
 });

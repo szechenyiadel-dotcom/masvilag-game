@@ -19669,6 +19669,8 @@ function sysLangText(w, playerId, hu, en) {
 }
 
 const BUILD_VERSION = "v99-performance-canon-cache-feed-tree";
+/* R108: when this bundle was built (shown in the header), so a phone that still runs an old version can be told apart */
+const BUILD_STAMP = typeof __BUILD_STAMP__ !== "undefined" ? "build " + __BUILD_STAMP__ : "";
 const WORLD_SCHEMA_VERSION = 97;
 
 /* Fast, safe clone for the large world state. */
@@ -61749,7 +61751,7 @@ const signOut = useCallback(async () => {
             </button>
             </div>
           </div>
-          <div className="hdr-meta" style={{ marginTop: 6 }}>{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_VERSION}</span></div>
+          <div className="hdr-meta" style={{ marginTop: 6 }}>{world.universe.name} · <span className="mono">{world.code}</span> · <span className="mono">@{me.username}</span> · <span className="mono">{BUILD_STAMP || BUILD_VERSION}</span></div>
           <div className="hint" style={{ marginTop: 2 }}>{saveLabel}{saveAt ? ` · ${timeAgo(saveAt)}` : ""}</div>
           {world.log.length > 0 && (
             <div className="ticker">

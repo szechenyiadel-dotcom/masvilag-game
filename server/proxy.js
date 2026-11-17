@@ -6070,6 +6070,19 @@ async function executeAITask(task) {
         continue;
       }
     }
+    /* R108: an answer that drifts into a script the request never used (Cyrillic, Armenian, Bengali, CJK … in an
+       English or Hungarian world) is broken output, not an answer: the next provider writes it. */
+    if (result?.ok) {
+      const leak = foreignScriptLeak(aiRequestText(task.body), answerText(result));
+      if (leak) {
+        console.warn("[ai-gate] foreign-script", `source=${task.source}`, `provider=${provider}/${model}`, `script=${leak.script}`, "sample=" + JSON.stringify(leak.sample), "— handing the request to the next provider");
+        attempts.push({ provider, model, status: 422, message: "answer drifted into " + leak.script });
+        /* kept only as a last resort for a player who is waiting — with the stray words taken out */
+        if (!unusableAnswer) unusableAnswer = { ...result, payload: { ...(result.payload || {}), content: [{ type: "text", text: stripForeignScriptWords(aiRequestText(task.body), answerText(result)) }] } };
+        markProviderSuccess(provider);
+        continue;
+      }
+    }
     if (result?.ok) {
       markProviderSuccess(provider);
       /* Diagnostics: what a comment request actually got back (start of the answer only). */
@@ -6203,6 +6216,39 @@ async function executeAITask(task) {
    AI_GATE_MAX_CONCURRENT requests run side by side (starts still spaced by
    AI_MIN_REQUEST_GAP_MS), highest priority first. */
 const AI_GATE_MAX_CONCURRENT = Math.max(1, Math.min(6, Number(process.env.AI_GATE_MAX_CONCURRENT) || 3));
+
+const FOREIGN_SCRIPTS = Object.freeze([
+  ["Cyrillic", /[\u0400-\u04FF]/g], ["Armenian", /[\u0530-\u058F]/g], ["Hebrew", /[\u0590-\u05FF]/g],
+  ["Arabic", /[\u0600-\u06FF\u0750-\u077F]/g], ["Indic", /[\u0900-\u0DFF]/g], ["Thai", /[\u0E00-\u0E7F]/g],
+  ["Georgian", /[\u10A0-\u10FF]/g], ["Japanese", /[\u3040-\u30FF]/g], ["Chinese", /[\u4E00-\u9FFF]/g],
+  ["Korean", /[\uAC00-\uD7AF\u1100-\u11FF]/g], ["Greek", /[\u0370-\u03FF]/g],
+]);
+/* the script, and a sample, that the answer uses while the request itself (barely) does not */
+function foreignScriptLeak(requestText, answer) {
+  const asked = String(requestText || "");
+  const said = String(answer || "");
+  if (!said) return null;
+  for (const [script, re] of FOREIGN_SCRIPTS) {
+    const inAnswer = said.match(re);
+    if (!inAnswer || !inAnswer.length) continue;
+    const inRequest = (asked.match(re) || []).length;
+    if (inRequest >= 20) continue;
+    const at = said.search(new RegExp(re.source));
+    return { script, sample: said.slice(Math.max(0, at - 20), at + 20) };
+  }
+  return null;
+}
+
+function stripForeignScriptWords(requestText, answer) {
+  let out = String(answer || "");
+  const asked = String(requestText || "");
+  for (const [, re] of FOREIGN_SCRIPTS) {
+    if ((asked.match(re) || []).length >= 20) continue;
+    const range = re.source;
+    out = out.replace(new RegExp("#?[^\\s\"]*" + range + "[^\\s\"]*", "g"), "");
+  }
+  return out.replace(/[ \t]{2,}/g, " ").replace(/ +([,.!?])/g, "$1");
+}
 
 function pumpAIGate() {
   if (AI_GATE.active >= AI_GATE_MAX_CONCURRENT || !AI_GATE.queue.length) return;
