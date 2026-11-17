@@ -5724,8 +5724,10 @@ function taskProviderOrder(requestedProvider, body) {
        Dolphin -> Nemotron -> free Gemini -> Groq 1 -> Groq 2 (when it fits). */
     /* R78: when every free one is out (Gemma 429, Nemotron daily cap, Gemini overloaded) a triggered DM ("text me",
        no follow-back, unfollow) still arrives through paid Venice — R71 already keeps these to a handful an hour. */
-    /* R104 (owner's rule): every paid slot is Venice (venice-uncensored-role-play) */
-    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "venice"];
+    /* R104 (owner's rule): every paid slot is Venice (venice-uncensored-role-play).
+       R105 (owner's rule): a character STARTING a DM is written by Gemini first; the chat that follows (the player
+       waiting on a reply) is NSFW territory and goes to Venice first. */
+    raw = ["gemini", "openrouter-dm-dolphin", "openrouter3", "groq", "groq2", "venice"];
     /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
     if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
