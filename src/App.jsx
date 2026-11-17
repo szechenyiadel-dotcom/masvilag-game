@@ -10654,6 +10654,18 @@ function isNearDuplicateCommentText(a, b) {
   return false;
 }
 
+/* R115 (owner's rule): two different people never post the same comment under one post — a new comment that (nearly)
+   repeats someone else's comment there is dropped */
+function commentEchoesAnother(post, made) {
+  if (!post || !made || !String(made.text || "").trim()) return false;
+  const echo = (Array.isArray(post.comments) ? post.comments : []).find((c) => c && c.authorId !== made.authorId && isNearDuplicateCommentText(c.text, made.text));
+  if (echo) {
+    try { reportClientDiag("comment-drop", { reason: "echoes-another", who: made.authorId, other: echo.authorId, text: made.text }); } catch (error) { /* diagnostics only */ }
+    return true;
+  }
+  return false;
+}
+
 function isRepetitiveComment(w, id, text) {
   const fresh = String(text || "").replace(/\s+/g, " ").trim();
   if (!fresh) return true;
@@ -27778,6 +27790,7 @@ const made = {
   ),
 };
 
+if (commentEchoesAnother(p, made)) return;
 p.comments.push(made);
 createdVisible += 1;
 
@@ -29419,6 +29432,7 @@ ${rootForAddress ? rootForAddress.text || "" : ""}`
       return;
     }
     const made = { id: uid(), authorId: who, text: body, ts: now(), parent: rootId, language: worldLanguage(n, n.meId) };
+    if (commentEchoesAnother(p, made)) return;
     p.comments.push(made);
     createdReplyIds.push(made.id);
     createdReplyActors.add(who);
@@ -30258,7 +30272,9 @@ function legacyChannelApplyWorldStep(n, out) {
       ) {
         return;
       }
-      made.push({ id: uid(), authorId: cid, text: body, ts: now(), parent, language: worldLanguage(n, n.meId) });
+      const row = { id: uid(), authorId: cid, text: body, ts: now(), parent, language: worldLanguage(n, n.meId) };
+      if (commentEchoesAnother({ comments: made }, row)) return;
+      made.push(row);
       rememberKnowledge(n, cid, {
         kind: "conversation",
         source: "self_action",
@@ -43832,6 +43848,7 @@ function applyGossipNetworkEcho(w, payload, out) {
           parent: null,
           language: worldLanguage(w, w.meId),
         };
+        if (commentEchoesAnother(post, made)) return;
         post.comments.push(made);
         noteComment(w, post, made);
         rumor.echoedBy[who] = ts;
@@ -46257,7 +46274,7 @@ function applyGossipReactions(n,postId,cast,out){
     let body=cleanGeneratedComment(n,who,item.text,280);if(!body)return;
     body=sanitizeGeneratedDirectAddress(n,who,post.authorId,body);if(!body)return;
     const made={id:uid(),authorId:who,text:body,ts:now(),parent:null,language:worldLanguage(n,n.meId)};
-    post.comments=safePostComments(post);post.comments.push(made);visibleActors.add(who);noteComment(n,post,made);
+    post.comments=safePostComments(post);if(commentEchoesAnother(post,made))return;post.comments.push(made);visibleActors.add(who);noteComment(n,post,made);
     recordSocialEvent(n,{type:"comment",refId:made.id,ts:made.ts,actorId:who,targetIds:post.gossipStory.mentionedIds||[],visibility:"public",factLevel:"observed",importance:32,drama:24,romance:0,embarrassment:0,source:"gossip-reaction",text:made.text,tags:["social","gossip-reaction","comment"],meta:{postId:post.id,commentId:made.id,storyId:post.gossipStory.id||""}});
   });
   (reactionOut&&Array.isArray(reactionOut.reposts)?reactionOut.reposts:[]).slice(0,4).forEach((id)=>{const who=aiVoice(n,id);if(who&&castSet.has(who)&&createRepost(n,who,post.id,"gossip-reaction"))visibleActors.add(who);});
@@ -52486,6 +52503,8 @@ function applySocialWave(
         };
 
         post.comments = safePostComments(post);
+
+        if (commentEchoesAnother(post, made)) return;
 
         post.comments.push(
           made
