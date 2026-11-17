@@ -145,3 +145,26 @@ test("R102: the sheet's own personality / key traits / speech style lead every s
   assert.match(card, /FULL strength/);
   assert.match(source, /return \[personaBlock, owner, extreme, style, bible\]/);
 });
+
+test("R113: deleting a character takes their posts, comments, DM threads, follows and bonds with them", () => {
+  const ctx = vm.createContext({ String, Object, Array, Set, now: () => 111 });
+  vm.runInContext(pick(["removeCharacterFromWorld"]), ctx);
+  const n = {
+    chars: [{ id: "a", name: "A", followers: ["x"], following: ["x"] }, { id: "x", name: "X", followers: ["a"], following: [] }],
+    players: { me: { id: "me", followers: ["x"], following: ["x", "a"] } },
+    posts: [{ id: "p1", authorId: "x", comments: [] }, { id: "p2", authorId: "a", comments: [{ id: "c1", authorId: "x" }, { id: "c2", authorId: "a", parent: "c1" }, { id: "c3", authorId: "me" }] }],
+    chats: { "me|x": [{ text: "hi" }], "me|a": [{ text: "yo" }] },
+    rels: { "x>a": {}, "a>x": {}, "a>me": {} },
+  };
+  ctx.removeCharacterFromWorld(n, "x");
+  assert.deepEqual(n.chars.map((c) => c.id), ["a"]);
+  assert.equal(n.deleted.x, 111);
+  assert.equal(n.deleted.p1, 111, "their post is marked deleted so a merge keeps it out");
+  assert.deepEqual(n.posts.map((p) => p.id), ["p2"]);
+  assert.deepEqual(n.posts[0].comments.map((c) => c.id), ["c3"], "their comment and the replies to it go");
+  assert.deepEqual(Object.keys(n.chats), ["me|a"]);
+  assert.deepEqual(n.chars[0].followers, []);
+  assert.deepEqual(n.players.me.following, ["a"]);
+  assert.deepEqual(Object.keys(n.rels), ["a>me"]);
+  assert.match(source, /if \(out\.deleted\[a\] \|\| \(b && out\.deleted\[b\]\)\) delete out\.chats\[k\]/);
+});
