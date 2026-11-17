@@ -9704,7 +9704,7 @@ function normalizeSceneAnswerShape(out) {
     const pick = (...keys) => { for (const k of keys) { const v = t[k]; if (typeof v === "string" && v.trim()) return v.trim(); } return ""; };
     const text = pick("text", "content", "line", "dialogue", "message", "speech", "action", "narration", "reply");
     if (!text) return null;
-    const id = t.id !== undefined && t.id !== null && String(t.id).trim() ? t.id : pick("name", "character", "speaker", "author", "who", "characterId", "character_id") || (t.narration ? "narrator" : "");
+    const id = t.id !== undefined && t.id !== null && String(t.id).trim() ? t.id : pick("name", "character", "speaker", "author", "who", "actor", "characterId", "character_id", "speakerId", "actorId") || (t.narration ? "narrator" : "");
     if (!id) return null;
     return { ...t, id, text, kind: t.kind || (typeof t.action === "string" && !t.text ? "action" : t.type === "action" ? "action" : t.kind) };
   };
@@ -9716,7 +9716,20 @@ function normalizeSceneAnswerShape(out) {
     return rows.length ? { ...out, turns: rows } : out;
   }
   const nested = out.scene && typeof out.scene === "object" ? out.scene : (out.roleplay && typeof out.roleplay === "object" ? out.roleplay : null);
-  for (const arr of [nested && nested.turns, out.dialogue, out.lines, out.responses, out.messages, out.replies, out.reply, out.script, nested && nested.dialogue]) {
+  /* R119: {"actions":[…],"dialogue":[…]}, {"sceneUpdates":[…]}, {"dialogues":[…]} — the lines came back under these keys
+     about every second round, the round was thrown away and asked again (twice the wait). Actions come first, then the
+     spoken lines that the action text does not already contain. */
+  const actionRows = [out.actions, out.sceneUpdates, out.sceneActions, nested && nested.actions]
+    .map(rowsOf).find((rows) => rows.length) || [];
+  if (actionRows.length) {
+    const flat = (v) => String(v || "").toLowerCase().replace(/["“”'‘’*]/g, "").replace(/\s+/g, " ").trim();
+    const acted = actionRows.map((r) => ({ id: String(r.id), text: flat(r.text) }));
+    const spoken = [out.dialogue, out.dialogues, out.lines, nested && nested.dialogue].map(rowsOf).find((rows) => rows.length) || [];
+    const extra = spoken.filter((r) => !acted.some((a) => a.id === String(r.id) && a.text.includes(flat(r.text))))
+      .map((r) => ({ ...r, kind: r.kind === "action" ? "action" : "speech" }));
+    return { ...out, turns: [...actionRows.map((r) => ({ ...r, kind: "action" })), ...extra] };
+  }
+  for (const arr of [nested && nested.turns, out.dialogue, out.dialogues, out.lines, out.responses, out.messages, out.replies, out.reply, out.script, nested && nested.dialogue]) {
     const rows = rowsOf(arr);
     if (rows.length) return { ...out, turns: rows };
   }
