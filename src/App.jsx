@@ -2117,6 +2117,7 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .char-edit-header { gap:8px; }
 .char-edit-header h2 { flex:1 1 auto; }
 .char-edit-head-save { display:none; }
+.char-edit-save-dock { display:none; }
 .char-edit-header h2 { font-family:var(--serif); font-weight:400; font-size:26px !important; letter-spacing:-.01em; margin:0; }
 .char-edit-nav { flex:1 0 100%; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
   margin:0 -14px; padding:2px 14px 2px; scroll-behavior:smooth; }
@@ -2143,9 +2144,14 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .char-edit-rel-card { background:var(--card); border:1px solid var(--card-line) !important; border-radius:18px; padding:12px 12px 10px !important; }
 .hint-more { display:none; }
 @media (max-width:768px) {
-  /* the Save bar sticks to the bottom of the editor's own scroll area (a fixed bar inside a scrolling sheet is not
-     shown by some phone browsers); no bottom padding, because sticky stops that far above the edge */
-  .char-edit-sheet { padding-bottom:0 !important; }
+  /* R106: the Save bar is pinned to the bottom of the full-screen editor, OUTSIDE the scrolling sheet (inside it,
+     neither a fixed nor a sticky bar stayed reachable on iPhone); the sheet keeps room under its last field */
+  .char-edit-sheet { padding-bottom:calc(104px + env(safe-area-inset-bottom)) !important; }
+  .char-edit-sheet .char-edit-save-inline { display:none !important; }
+  .char-edit-save-dock { display:block !important; position:absolute; left:0; right:0; bottom:0; z-index:200;
+    padding:10px 14px calc(12px + env(safe-area-inset-bottom)); background:rgba(4, 9, 6, .985);
+    border-top:1px solid var(--card-line); box-shadow:0 -10px 30px rgba(0,0,0,.45); }
+  .char-edit-save-dock .btn { min-height:50px; font-size:16px; }
   .char-edit-header { padding-bottom:8px !important; }
   .char-edit-head-save { display:inline-flex; min-height:44px; padding:0 16px; }
   .char-edit-sheet .mobile-action-bar { position:sticky !important; bottom:0 !important; z-index:160;
@@ -32320,7 +32326,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
         onClick={(e) => e.stopPropagation()}
       >
         <div className="between char-edit-header">
-          <h2 style={{ fontSize: 20 }}>{initial.id ? tt("Karakter szerkesztése", "Edit character") : tt("Új karakter", "New character")}</h2>
+          <h2 style={{ fontSize: 20 }}>{initial.id && !isNew ? tt("Karakter szerkesztése", "Edit character") : tt("Új karakter", "New character")}</h2>
           <button className="btn tiny ghost" onClick={onClose}>
             <ChevronLeft size={14} />
             {tt("Vissza", "Back")}
@@ -32498,7 +32504,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
           </>
         )}
 
-        <div className="mobile-action-bar" style={{ marginTop: 18 }}>
+        <div className="mobile-action-bar char-edit-save-inline" style={{ marginTop: 18 }}>
   <button
     className="btn primary full"
     onClick={saveChar}
@@ -32506,6 +32512,13 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
     {tt("Mentés", "Save")}
   </button>
 </div>
+      </div>
+      {/* R106: on a phone the Save bar sits OUTSIDE the scrolling sheet, pinned to the bottom of the full-screen editor —
+          a sticky bar inside the scrolling sheet ended up out of reach on iPhone */}
+      <div className="char-edit-save-dock" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="btn primary full" onClick={saveChar}>
+          {tt("Mentés", "Save")}
+        </button>
       </div>
     </div>
   );
