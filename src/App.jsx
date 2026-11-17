@@ -33465,11 +33465,13 @@ function CharacterLibraryPanel({ w, update, setErr }) {
           const clean = { ...(row.data || {}) };
           delete clean.__kind; delete clean.__sourceId;
           if (asMe) {
-            const mine = n.players && n.players[n.meId];
-            if (!mine) return;
-            n.players[n.meId] = {
+            /* R112: the saved world has no meId (only the view does) — "Play as" silently did nothing */
+            const meId = n.meId || (w && w.meId) || "";
+            const mine = meId && n.players && n.players[meId];
+            if (!mine) { skipped.push(clean.name || "?"); return; }
+            n.players[meId] = {
               ...mine, ...clean,
-              id: n.meId, username: mine.username,
+              id: meId, username: mine.username,
               followers: mine.followers || [], following: mine.following || [],
               updatedAt: now(),
             };
@@ -33494,7 +33496,9 @@ function CharacterLibraryPanel({ w, update, setErr }) {
       });
       setPickImport({});
       setMsg(asMe
-        ? tt("Mostantól ez a saját karaktered ebben a világban: ", "This is now your own character in this world: ") + added.join(", ")
+        ? (added.length
+          ? tt("Mostantól ez a saját karaktered ebben a világban: ", "This is now your own character in this world: ") + added.join(", ")
+          : tt("Nem sikerült átvenni a karaktert — a saját profilod nem található ebben a világban.", "Could not take over the character — your own profile was not found in this world."))
         : tt("Hozzáadva ehhez a világhoz: ", "Added to this world: ") + (added.join(", ") || "—") +
           (skipped.length ? tt(" · Kihagyva (már van ilyen nevű): ", " · Skipped (already here): ") + skipped.join(", ") : ""));
     } catch (error) {
