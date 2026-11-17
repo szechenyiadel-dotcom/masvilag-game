@@ -29,10 +29,10 @@ export function isForegroundRequest(body) {
 /* What the world may write on its own when every free provider is spent or busy: Gemini, then OpenRouter, and OpenAI
    as the very last one (the owner's rule). Not for popups and invitations (never paid), nor for the analysis and
    translation chores that run constantly and have free chains of their own. */
-export const PAID_LAST_RESORT_PROVIDERS = Object.freeze(["openai"]);
+export const PAID_LAST_RESORT_PROVIDERS = Object.freeze(["venice"]);
 /* Reading a whole character sheet matters more than what it costs: when Gemini and the free models cannot do it, the paid
    OpenRouter route reads it (OpenRouter is the first paid provider), and OpenAI after that. */
-export const PAID_SHEET_READING_PROVIDERS = Object.freeze(["venice", "openrouter-dm-venice", "openai"]);
+export const PAID_SHEET_READING_PROVIDERS = Object.freeze(["venice"]);
 export function paidBackgroundProviders(source, isUtility = false) {
   const kind = String(source || "").trim().toLowerCase();
   if (SHEET_READING_SOURCES.includes(kind)) return PAID_SHEET_READING_PROVIDERS;

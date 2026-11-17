@@ -5256,7 +5256,7 @@ function providerModel(provider, body = {}) {
     return String(process.env.OPENROUTER_DM_PAID_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition").trim();
   }
   /* R103: Venice directly (venice.ai, VENICE_API_KEY) — the same uncensored Venice model the paid OpenRouter slot used */
-  if (provider === "venice") return String(process.env.VENICE_MODEL || "venice-uncensored-1-2").trim();
+  if (provider === "venice") return String(process.env.VENICE_MODEL || "venice-uncensored-role-play").trim();
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-super-120b-a12b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
@@ -5351,7 +5351,7 @@ function providerOrder(requestedProvider) {
     .filter(Boolean);
   const raw = configured.length
     ? configured
-    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "mistral", "mistral2", "groq", "groq2", "gemini", "openai", "anthropic"];
+    : [requestedProvider, "openrouter3", "openrouter2", "openrouter", "groq", "groq2", "gemini", "venice"];
   const ordered = [];
   for (const provider of raw) {
     if (!ordered.includes(provider) && configuredAIProvider(provider)) ordered.push(provider);
@@ -5724,13 +5724,14 @@ function taskProviderOrder(requestedProvider, body) {
        Dolphin -> Nemotron -> free Gemini -> Groq 1 -> Groq 2 (when it fits). */
     /* R78: when every free one is out (Gemma 429, Nemotron daily cap, Gemini overloaded) a triggered DM ("text me",
        no follow-back, unfollow) still arrives through paid Venice — R71 already keeps these to a handful an hour. */
-    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "venice", "openrouter-dm-venice"];
+    /* R104 (owner's rule): every paid slot is Venice (venice-uncensored-role-play) */
+    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "venice"];
     /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
     if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
     /* A reply the player is waiting on (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2.
        The free Gemma slot is left out: it answered 429 to every one of its last 200 requests. */
-    raw = ["venice", "openrouter-dm-venice", "mistral", "mistral2"];
+    raw = ["venice", "gemini"];
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
        waiting on it (reroll / own answer). */
@@ -5738,19 +5739,19 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini", "groq", "groq2", "openrouter3"];
   } else if (source === "scene") {
     /* Scenes (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2. */
-    raw = ["venice", "openrouter-dm-venice", "mistral", "mistral2"];
+    raw = ["venice", "gemini"];
   } else if (isComment) {
     /* Comments and posts (the owner's rule): Gemma (OpenRouter, free) -> every Gemini key and model -> paid OpenAI last.
        Groq 1 and 2 (free) sit before OpenAI as a safety net: with the free Gemma answering 429 and Gemini overloaded, a
        chain that ended on an OpenAI key out of credit left every comment and every post unwritten. */
     /* R103: direct Venice (paid) as the very last net, after the OpenAI key that has no credit left */
-    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai", "venice"];
+    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "venice"];
   } else if (isFeed) {
-    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai", "venice"];
+    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "venice"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Canon/identity knowledge (reading a whole character sheet is important): Gemini; if it cannot, the other free models
        (Groq when the sheet fits it, Nemotron, Gemma); then the paid OpenRouter route; OpenAI as the very last one. */
-    raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "venice", "openrouter-dm-venice", "openai"];
+    raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "venice"];
   } else if (isGroqUtilitySource(source)) {
     /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
@@ -5759,7 +5760,7 @@ function taskProviderOrder(requestedProvider, body) {
   } else {
     /* Everything else the world writes on its own (notes, group chat, ...): Gemini, then OpenRouter (free), Groq when
        the request is small enough for it, and OpenAI as the very last one. */
-    raw = ["gemini", "openrouter3", "openrouter-dm-dolphin", ...(groqSmallEnough ? ["groq", "groq2"] : []), "openai"];
+    raw = ["gemini", "openrouter3", "openrouter-dm-dolphin", ...(groqSmallEnough ? ["groq", "groq2"] : []), "venice"];
   }
 
   /* The explicitly assigned DM and Gemini-fallback chains keep their exact order. Other request kinds may

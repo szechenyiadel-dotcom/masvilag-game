@@ -41,6 +41,7 @@ async function request(url, options = {}) {
 const COMPAT_ANALYSIS_URLS = Object.freeze({
   groq: "https://api.groq.com/openai/v1/chat/completions",
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  venice: "https://api.venice.ai/api/v1/chat/completions",
 });
 function freeCompatCandidates(env) {
   if (/^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_FREE_COMPAT || "").trim())) return [];
@@ -56,12 +57,15 @@ function freeCompatCandidates(env) {
 /* Reading a sheet is important: when Gemini and the free models cannot, the paid OpenRouter route (the funded key) reads it
    before OpenAI does (OpenRouter is the first paid provider). BOND_ANALYSIS_OPENROUTER_PAID=off switches it off, and
    OPENROUTER_DM_PAID_MODEL names the model, as for DMs and scenes. */
-function paidOpenRouterCandidates(env) {
-  if (!env.OPENROUTER_API_KEY_2 || /^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_OPENROUTER_PAID || "").trim())) return [];
+/* R104 (owner's rule): the one paid reader is Venice (VENICE_API_KEY, venice-uncensored-role-play unless VENICE_MODEL
+   says otherwise); BOND_ANALYSIS_VENICE=off switches it off. */
+function paidVeniceCandidates(env) {
+  const key = String(env.VENICE_API_KEY || "").trim().replace(/^Bearer\s+/i, "");
+  if (!key || /^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_VENICE || "").trim())) return [];
   return [{
-    name: "openrouter",
-    model: String(env.OPENROUTER_DM_PAID_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition").trim(),
-    key: env.OPENROUTER_API_KEY_2, keySlot: "OPENROUTER_API_KEY_2", url: COMPAT_ANALYSIS_URLS.openrouter, maxOutput: 32000,
+    name: "venice",
+    model: String(env.VENICE_MODEL || "venice-uncensored-role-play").trim(),
+    key, keySlot: "VENICE_API_KEY", url: COMPAT_ANALYSIS_URLS.venice, maxOutput: 16000,
   }];
 }
 
@@ -74,7 +78,6 @@ function uniqueValues(values) {
 // switches it off. The paid Gemini key stays opt-in (AI_ALLOW_PAID_BACKGROUND=1). Groq 1, Groq 2 and Nemotron :free
 // sit between Gemini and OpenAI (owner's order); what they cannot carry or get wrong simply moves on.
 const allowPaid = (env) => String(env.AI_ALLOW_PAID_BACKGROUND || "").trim() === "1";
-const openaiFallback = (env) => Boolean(env.OPENAI_API_KEY) && !/^(0|off|false|no)$/i.test(String(env.BOND_ANALYSIS_OPENAI || "").trim());
 
 const FREE_GEMINI_SLOTS = ["GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8"];
 
@@ -156,14 +159,7 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
     const flash = uniqueValues([...(config.extra.length ? [BOND_FLASH_EXTRA] : []), ...config.extra]);
     candidates.push(...geminiCandidates(env, [[config.lite, groups.lite], [config.lite, groups.flash], [flash, groups.flash], [flash, groups.lite]]));
 
-    if (openaiFallback(env)) {
-      candidates.push({
-        name: "openai",
-        model: env.OPENAI_SCHEMA_MODEL || env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6-luna",
-        key: env.OPENAI_API_KEY,
-        keySlot: "OPENAI_API_KEY",
-      });
-    }
+    candidates.push(...paidVeniceCandidates(env));
     return candidates;
   }
 
@@ -180,16 +176,7 @@ export function providerCandidates(env, mode = "semantic", semanticStartOffset =
   candidates.push(...geminiCandidates(env, modelGroups));
   /* The owner's order for a reading: Gemini -> Groq 1 -> Groq 2 -> Nemotron -> OpenAI. */
   candidates.push(...freeCompatCandidates(env));
-  candidates.push(...paidOpenRouterCandidates(env));
-
-  if (openaiFallback(env)) {
-    candidates.push({
-      name: "openai",
-      model: env.OPENAI_ANALYSIS_MODEL || env.OPENAI_MODEL || env.OPENAI_CHAT_MODEL || "gpt-6.1-sol",
-      key: env.OPENAI_API_KEY,
-      keySlot: "OPENAI_API_KEY",
-    });
-  }
+  candidates.push(...paidVeniceCandidates(env));
   return candidates;
 }
 
@@ -246,7 +233,7 @@ async function modelCapabilities(candidate, prompt, schema, transport, { fastCap
     };
   }
 
-  if (candidate.name === "openai" || candidate.name === "groq" || candidate.name === "openrouter") {
+  if (candidate.name === "openai" || candidate.name === "groq" || candidate.name === "openrouter" || candidate.name === "venice") {
     return {
       contextWindow: null,
       outputLimit: null,
@@ -300,7 +287,9 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
       .join("");
   }
 
-  if (candidate.name === "groq" || candidate.name === "openrouter") {
+  if (candidate.name === "groq" || candidate.name === "openrouter" || candidate.name === "venice") {
+    const venice = candidate.name === "venice";
+    if (venice) console.info("[bond-analysis-paid] venice", candidate.model, "mode=" + mode, "promptChars=" + completePrompt.length);
     const data = await transport(candidate.url, {
       method: "POST",
       timeoutMs: Math.min(timeoutMs, 180000),
@@ -308,7 +297,8 @@ async function callStructuredCandidate(candidate, completePrompt, schema, output
       body: JSON.stringify({
         model: candidate.model,
         messages: [{ role: "user", content: completePrompt + "\n\nReturn ONLY one JSON object that matches this JSON SCHEMA:\n" + JSON.stringify(schema) }],
-        response_format: { type: "json_object" },
+        /* Venice documents json_schema only; it gets the schema in the prompt and no response_format */
+        ...(venice ? { venice_parameters: { include_venice_system_prompt: false } } : { response_format: { type: "json_object" } }),
         max_tokens: Math.min(Number(outputTokens) || 8192, Number(candidate.maxOutput) || 8192),
       }),
     });
