@@ -271,8 +271,8 @@ test("Gemini semantic routing tries free keys 2 through 8 before paid key 1", as
  assert.equal(result.provider, "gemini");
  assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8"]);
 });
-test("Restart profile rotation keeps every free Gemini key (each group rotated), then asks OpenAI once, and never the paid Gemini key", async () => {
- const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
+test("Restart profile rotation keeps every free Gemini key (each group rotated), then asks Venice once, and never the paid Gemini key or OpenAI", async () => {
+ const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", VENICE_API_KEY: "venice-key", VENICE_MODEL: "configured-venice", OPENAI_API_KEY: "openai-key", OPENAI_ANALYSIS_MODEL: "configured-openai" };
  for (let i = 1; i <= 8; i++) env["GEMINI_API_KEY" + (i === 1 ? "" : "_" + i)] = "test-key-" + i;
  const attempted = [];
  const transport = async (url, opts) => {
@@ -293,8 +293,8 @@ test("Restart profile rotation keeps every free Gemini key (each group rotated),
   value => assert.equal(value.ok, true),
   { env, transport, outputTokens: 1000, semanticStartOffset: 3 }
  );
- assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-8","test-key-5","test-key-6","test-key-7","Bearer openai-key"], "the 3 Flash keys, then the 4 light-model keys helping out, rotated by 3 within each group");
- assert.equal(result.provider, "openai"); assert.equal(result.model, "configured-openai");
+ assert.deepEqual(attempted, ["test-key-2","test-key-3","test-key-4","test-key-8","test-key-5","test-key-6","test-key-7","Bearer venice-key"], "the 3 Flash keys, then the 4 light-model keys helping out, rotated by 3 within each group");
+ assert.equal(result.provider, "venice"); assert.equal(result.model, "configured-venice");
 });
 test("Paid Gemini key 1 is never used for analysis unless paid background use is switched on", async () => {
  const run = async (extraEnv) => {
@@ -320,9 +320,9 @@ test("Paid Gemini key 1 is never used for analysis unless paid background use is
  assert.deepEqual(paid.attempted, ["test-key-2","test-key-3","test-key-4","test-key-5","test-key-6","test-key-7","test-key-8","test-key-1"]);
  assert.equal(paid.result.keySlot, "GEMINI_API_KEY");
 });
-test("OpenAI is the paid last resort of a sheet reading: after every free Gemini key, never the paid Gemini key, and it can be switched off", async () => {
+test("Venice is the paid last resort of a sheet reading: after every free Gemini key, never the paid Gemini key or OpenAI, and BOND_ANALYSIS_VENICE=off switches it off", async () => {
  const run = async (extraEnv) => {
-  const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai", ...extraEnv };
+  const env = { GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off", GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "g2", GEMINI_API_KEY: "g1", VENICE_API_KEY: "vn", OPENAI_API_KEY: "oa", OPENAI_ANALYSIS_MODEL: "configured-openai", ...extraEnv };
   const attempted = [];
   const transport = async (url, opts) => {
    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
@@ -334,14 +334,16 @@ test("OpenAI is the paid last resort of a sheet reading: after every free Gemini
   return { attempted, ...outcome };
  };
  const normal = await run({});
- assert.deepEqual(normal.attempted, ["g2", "Bearer oa"], "free key first, OpenAI next, paid Gemini key 1 never");
- assert.equal(normal.result.provider, "openai"); assert.equal(normal.result.keySlot, "OPENAI_API_KEY");
- const off = await run({ BOND_ANALYSIS_OPENAI: "off" });
- assert.deepEqual(off.attempted, ["g2"]); assert.ok(off.error);
- const noKey = await run({ OPENAI_API_KEY: "" });
+ assert.deepEqual(normal.attempted, ["g2", "Bearer vn"], "free key first, Venice next, paid Gemini key 1 and OpenAI never");
+ assert.equal(normal.result.provider, "venice"); assert.equal(normal.result.keySlot, "VENICE_API_KEY"); assert.equal(normal.result.model, "venice-uncensored-role-play");
+ const off = await run({ BOND_ANALYSIS_VENICE: "off" });
+ assert.deepEqual(off.attempted, ["g2"], "switched off, and OpenAI does not take its place"); assert.ok(off.error);
+ const noKey = await run({ VENICE_API_KEY: "" });
  assert.deepEqual(noKey.attempted, ["g2"]); assert.ok(noKey.error);
+ const bearer = await run({ VENICE_API_KEY: "Bearer vn" });
+ assert.deepEqual(bearer.attempted, ["g2", "Bearer vn"], "a key pasted with its Bearer prefix is not sent as 'Bearer Bearer'");
  const everything = await run({ AI_ALLOW_PAID_BACKGROUND: "1" });
- assert.deepEqual(everything.attempted, ["g2", "g1", "Bearer oa"], "the paid Gemini key is still opt-in, and stays before OpenAI");
+ assert.deepEqual(everything.attempted, ["g2", "g1", "Bearer vn"], "the paid Gemini key is still opt-in, and stays before Venice");
 });
 test("OpenAI is asked with the whole prompt and a paid call is logged without the key", async () => {
  const prompt = "entire sheet ".repeat(5500) + "FINAL SOURCE";
@@ -397,10 +399,10 @@ test("Provider-side invalid JSON receives two attempts before failover", async (
  const result = await analyzeStructured("Complete original sheet", { type: "object" }, result => assert.equal(result.ok, true), { candidates, transport, outputTokens: 1000 });
  assert.equal(invalid, 1); assert.equal(result.provider, "openai");
 });
-test("Schema routing asks the light Gemini models on the free keys first and OpenAI last, never Groq", async () => {
+test("Schema routing asks the light Gemini models on the free keys first and Venice last, never Groq or OpenAI", async () => {
  const run = async (extraEnv) => {
   const tried = [];
-  const env = { GEMINI_API_KEY_2: "g2", GEMINI_LITE_MODELS: "lite-x", GEMINI_EXTRA_MODELS: "off", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2", GROQ_MODEL: "groq-m", OPENAI_API_KEY: "openai-key", OPENAI_SCHEMA_MODEL: "configured-openai", ...extraEnv };
+  const env = { GEMINI_API_KEY_2: "g2", GEMINI_LITE_MODELS: "lite-x", GEMINI_EXTRA_MODELS: "off", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2", GROQ_MODEL: "groq-m", VENICE_API_KEY: "venice-key", VENICE_MODEL: "configured-venice", OPENAI_API_KEY: "openai-key", OPENAI_SCHEMA_MODEL: "configured-openai", ...extraEnv };
   const transport = async (url, opts) => {
    if (url.endsWith(":countTokens")) return { totalTokens: 100 };
    if (url.endsWith(":generateContent")) { tried.push("gemini:" + decodeURIComponent(url.split("/models/")[1].split(":")[0])); const error = new Error("quota"); error.status = 429; throw error; }
@@ -411,9 +413,9 @@ test("Schema routing asks the light Gemini models on the free keys first and Ope
   return { tried, ...outcome };
  };
  const normal = await run({});
- assert.deepEqual(normal.tried, ["gemini:lite-x", "Bearer openai-key"]);
- assert.equal(normal.result.provider, "openai"); assert.equal(normal.result.keySlot, "OPENAI_API_KEY"); assert.equal(normal.result.model, "configured-openai");
- const off = await run({ BOND_ANALYSIS_OPENAI: "off" });
+ assert.deepEqual(normal.tried, ["gemini:lite-x", "Bearer venice-key"]);
+ assert.equal(normal.result.provider, "venice"); assert.equal(normal.result.keySlot, "VENICE_API_KEY"); assert.equal(normal.result.model, "configured-venice");
+ const off = await run({ BOND_ANALYSIS_VENICE: "off" });
  assert.deepEqual(off.tried, ["gemini:lite-x"]); assert.ok(off.error);
 });
 test("Neutral complete-graph records do not imply acquaintance or social interest", () => {
@@ -557,13 +559,14 @@ test("Quote check ignores layout only: spacing, typographic quotes and dashes, n
  assert.throws(() => quoted(42));
 });
 
-test("All 20 sheets complete when Gemini quota runs out after 16 and Groq is rate-limited: OpenAI reads the rest, each with the whole sheet", async () => {
+test("All 20 sheets complete when Gemini quota runs out after 16 and Groq is rate-limited: Venice reads the rest, each with the whole sheet", async () => {
  const env = {
   GEMINI_ANALYSIS_MODEL: "configured-gemini", GEMINI_API_KEY_2: "free", GEMINI_API_KEY: "paid",
-  OPENAI_API_KEY: "openai", OPENAI_ANALYSIS_MODEL: "configured-openai",
+  VENICE_API_KEY: "venice", OPENAI_API_KEY: "openai", OPENAI_ANALYSIS_MODEL: "configured-openai",
   GROQ_ANALYSIS_MODEL: "configured-groq", GROQ_API_KEY: "groq-1", GROQ_API_KEY_2: "groq-2",
  };
- const completed = [], fallbackPrompts = [], hosts = new Set();
+ const completed = [], fallbackPrompts = [], fallbackBodies = [], hosts = new Set();
+ const SCHEMA_TAIL = "\n\nReturn ONLY one JSON object that matches this JSON SCHEMA:\n";
  let prompt;
  const transport = async (url, options) => {
   if (url.endsWith(":countTokens")) return { totalTokens: 12000 };
@@ -575,8 +578,10 @@ test("All 20 sheets complete when Gemini quota runs out after 16 and Groq is rat
   hosts.add(new URL(url).host);
   if (url.includes("api.groq.com")) throw Object.assign(new Error("rate limited"), { status: 429 });
   const body = JSON.parse(options.body);
+  fallbackBodies.push(body);
   fallbackPrompts.push(body.messages[0].content);
-  return response({ sheet: body.messages[0].content });
+  /* Venice gets the schema after the sheet (it has no response_format): the sheet itself is everything before it */
+  return response({ sheet: body.messages[0].content.split(SCHEMA_TAIL)[0] });
  };
  for (let i = 0; i < 20; i++) {
   prompt = "Full sheet " + i + "\n" + "complete source ".repeat(2800) + "END";
@@ -584,10 +589,11 @@ test("All 20 sheets complete when Gemini quota runs out after 16 and Groq is rat
   completed.push(result);
  }
  assert.equal(completed.length, 20);
- assert.deepEqual(completed.slice(16).map(row => row.keySlot), Array(4).fill("OPENAI_API_KEY"));
+ assert.deepEqual(completed.slice(16).map(row => row.keySlot), Array(4).fill("VENICE_API_KEY"));
  assert.equal(fallbackPrompts.length, 4);
- assert.ok(fallbackPrompts.every(value => value.endsWith("END") && value.length > 39000));
- assert.deepEqual([...hosts].sort(), ["api.groq.com", "api.openai.com"], "Groq is asked before OpenAI");
+ assert.ok(fallbackPrompts.every(value => value.includes("END" + SCHEMA_TAIL) && value.length > 39000), "the whole sheet, then the schema");
+ assert.ok(fallbackBodies.every(body => body.model === "venice-uncensored-role-play" && body.venice_parameters?.include_venice_system_prompt === false && !("response_format" in body)), "no Venice system prompt, no response_format");
+ assert.deepEqual([...hosts].sort(), ["api.groq.com", "api.venice.ai"], "Groq is asked before Venice, OpenAI never");
 });
 
 test("An incomplete OpenAI answer is never accepted", async () => {
@@ -595,33 +601,36 @@ test("An incomplete OpenAI answer is never accepted", async () => {
  await assert.rejects(analyzeStructured("full sheet ".repeat(6000), { type: "object" }, () => {}, { candidates: [candidates[1]], transport }), /Incomplete OpenAI analysis: length/);
 });
 
-test("With the funded OpenRouter key a sheet reading goes ... -> Nemotron -> the paid OpenRouter route -> OpenAI; it can be switched off and its model named", () => {
- const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", OPENROUTER_API_KEY: "or", OPENROUTER_API_KEY_2: "or2", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
+test("Even with the funded OpenRouter key and an OpenAI key a sheet reading goes ... -> Nemotron -> paid Venice; it can be switched off and its model named", () => {
+ const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", OPENROUTER_API_KEY: "or", OPENROUTER_API_KEY_2: "or2", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa", VENICE_API_KEY: "vn" };
  for (const mode of ["semantic", "profile"]) {
   const rows = providerCandidates(config, mode);
   const tail = rows.slice(rows.findIndex(c => c.name !== "gemini")).map(c => c.name + ":" + c.keySlot);
-  assert.deepEqual(tail, ["groq:GROQ_API_KEY", "groq:GROQ_API_KEY_2", "openrouter:OPENROUTER_API_KEY", "openrouter:OPENROUTER_API_KEY_2", "openai:OPENAI_API_KEY"], mode);
-  const paid = rows.find(c => c.keySlot === "OPENROUTER_API_KEY_2");
-  assert.equal(paid.model, "cognitivecomputations/dolphin-mistral-24b-venice-edition");
-  assert.equal(providerCandidates({ ...config, OPENROUTER_DM_PAID_MODEL: "meta-llama/llama-3.3-70b-instruct" }, mode).find(c => c.keySlot === "OPENROUTER_API_KEY_2").model, "meta-llama/llama-3.3-70b-instruct");
-  assert.ok(!providerCandidates({ ...config, BOND_ANALYSIS_OPENROUTER_PAID: "off" }, mode).some(c => c.keySlot === "OPENROUTER_API_KEY_2"), "switch");
+  assert.deepEqual(tail, ["groq:GROQ_API_KEY", "groq:GROQ_API_KEY_2", "openrouter:OPENROUTER_API_KEY", "venice:VENICE_API_KEY"], mode);
+  assert.ok(!rows.some(c => c.keySlot === "OPENROUTER_API_KEY_2" || c.name === "openai"), mode + ": no paid OpenRouter route, no OpenAI (R104)");
+  const paid = rows.find(c => c.keySlot === "VENICE_API_KEY");
+  assert.equal(paid.model, "venice-uncensored-role-play");
+  assert.equal(paid.url, "https://api.venice.ai/api/v1/chat/completions");
+  assert.equal(providerCandidates({ ...config, VENICE_MODEL: "venice-uncensored" }, mode).find(c => c.keySlot === "VENICE_API_KEY").model, "venice-uncensored");
+  assert.ok(!providerCandidates({ ...config, BOND_ANALYSIS_VENICE: "off" }, mode).some(c => c.keySlot === "VENICE_API_KEY"), "switch");
  }
- assert.ok(!providerCandidates(config, "schema").some(c => c.name === "openrouter"), "schema repair stays on Gemini and OpenAI");
+ assert.ok(!providerCandidates(config, "schema").some(c => c.name === "openrouter" || c.name === "openai"), "schema repair stays on Gemini and Venice");
 });
 
-test("A sheet reading goes Gemini -> Groq 1 -> Groq 2 -> Nemotron -> OpenAI; schema repair stays on Gemini and OpenAI", () => {
- const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", OPENROUTER_API_KEY: "or", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa" };
+test("A sheet reading goes Gemini -> Groq 1 -> Groq 2 -> Nemotron -> Venice; schema repair stays on Gemini and Venice", () => {
+ const config = { GROQ_API_KEY: "gk", GROQ_API_KEY_2: "gk2", GROQ_MODEL: "groq-m", GROQ_ANALYSIS_MODEL: "groq-a", OPENROUTER_API_KEY: "or", OPENROUTER_MODEL_3: "nvidia/nemotron-x:free", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", OPENAI_API_KEY: "oa", VENICE_API_KEY: "vn" };
  for (const mode of ["semantic", "profile"]) {
   const rows = providerCandidates(config, mode);
   const firstOther = rows.findIndex(c => c.name !== "gemini");
   assert.ok(firstOther > 0 && rows.slice(0, firstOther).every(c => c.name === "gemini"), mode + ": Gemini first");
   const tail = rows.slice(firstOther).map(c => c.name + ":" + c.keySlot);
-  assert.deepEqual(tail, ["groq:GROQ_API_KEY", "groq:GROQ_API_KEY_2", "openrouter:OPENROUTER_API_KEY", "openai:OPENAI_API_KEY"], mode);
+  assert.deepEqual(tail, ["groq:GROQ_API_KEY", "groq:GROQ_API_KEY_2", "openrouter:OPENROUTER_API_KEY", "venice:VENICE_API_KEY"], mode);
   assert.equal(rows[firstOther].model, "groq-a");
   assert.equal(rows[firstOther + 2].model, "nvidia/nemotron-x:free");
  }
- assert.ok(providerCandidates(config, "schema").every(candidate => candidate.name === "gemini" || candidate.name === "openai"), "schema");
- assert.ok(providerCandidates({ ...config, BOND_ANALYSIS_FREE_COMPAT: "off" }, "semantic").every(c => c.name === "gemini" || c.name === "openai"), "switch");
+ assert.ok(providerCandidates(config, "schema").every(candidate => candidate.name === "gemini" || candidate.name === "venice"), "schema");
+ assert.equal(providerCandidates(config, "schema").at(-1).name, "venice", "schema: Venice last");
+ assert.ok(providerCandidates({ ...config, BOND_ANALYSIS_FREE_COMPAT: "off" }, "semantic").every(c => c.name === "gemini" || c.name === "venice"), "switch");
 });
 
 test("Groq/Nemotron readers get the schema in the prompt, a JSON answer, and a capped output", async () => {
@@ -863,15 +872,16 @@ test("When the plain Flash models are overloaded the light models on the 4 light
   assert.deepEqual(attempted, ["3.8-flash@k2", "3.5-flash@k2", "3.7-flash@k2", "3.6-flash@k2", "3.5-flash-lite@k5"], "each busy model was asked once, then the first light key answered");
 });
 
-test("The paid Gemini key stays opt-in and is asked after every free candidate, OpenAI after it", () => {
-  const without = providerCandidates(sevenKeys({ GEMINI_API_KEY: "paid", OPENAI_API_KEY: "oa" }), "semantic");
+test("The paid Gemini key stays opt-in and is asked after every free candidate, Venice after it", () => {
+  const without = providerCandidates(sevenKeys({ GEMINI_API_KEY: "paid", OPENAI_API_KEY: "oa", VENICE_API_KEY: "vn" }), "semantic");
   assert.ok(without.every((candidate) => candidate.key !== "paid"));
-  assert.equal(without.at(-1).name, "openai");
-  const withPaid = providerCandidates(sevenKeys({ GEMINI_API_KEY: "paid", OPENAI_API_KEY: "oa", AI_ALLOW_PAID_BACKGROUND: "1" }), "semantic");
+  assert.equal(without.at(-1).name, "venice");
+  assert.ok(without.every((candidate) => candidate.name !== "openai"), "OpenAI is no longer a candidate (R104)");
+  const withPaid = providerCandidates(sevenKeys({ GEMINI_API_KEY: "paid", OPENAI_API_KEY: "oa", VENICE_API_KEY: "vn", AI_ALLOW_PAID_BACKGROUND: "1" }), "semantic");
   const firstPaid = withPaid.findIndex((candidate) => candidate.key === "paid");
   assert.ok(firstPaid > 0 && withPaid.slice(0, firstPaid).every((candidate) => candidate.key !== "paid" && candidate.name === "gemini"));
   assert.equal(withPaid.slice(firstPaid, -1).every((candidate) => candidate.key === "paid"), true);
-  assert.equal(withPaid.at(-1).name, "openai");
+  assert.equal(withPaid.at(-1).name, "venice");
 });
 
 test("Repair work starts on the light models of the light keys, then the plain Flash models", () => {
@@ -925,24 +935,26 @@ test("The prompt asks for compact but always filled texts, and still lets the un
 
 /* ---------- a reading that cannot be repaired must not run up paid calls ---------- */
 
-test("The paid repair is asked once per reading, however many models give an answer that does not validate", async () => {
-  const env = sevenKeys({ OPENAI_API_KEY: "oa", OPENAI_SCHEMA_MODEL: "schema-openai", GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off" });
-  let openaiCalls = 0;
+/* R104: the once-per-reading cap on the paid repair covers Venice, the one paid repair now */
+test("The paid (Venice) repair is asked once per reading, however many models give an answer that does not validate", async () => {
+  const env = sevenKeys({ VENICE_API_KEY: "vn", OPENAI_API_KEY: "oa", OPENAI_SCHEMA_MODEL: "schema-openai", GEMINI_EXTRA_MODELS: "off", GEMINI_LITE_MODELS: "off" });
+  let veniceCalls = 0;
   const logged = [];
   const warn = console.warn; console.warn = (...args) => logged.push(args.join(" "));
   const transport = async (url, opts) => {
     if (url.endsWith(":countTokens")) return { totalTokens: 100 };
     if (url.endsWith(":generateContent")) return { candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"ok":false}' }] } }] };
     if (url.includes("generativelanguage")) return { supportedGenerationMethods: ["generateContent"], inputTokenLimit: 1000000, outputTokenLimit: 65536 };
-    openaiCalls += 1;
+    assert.ok(url.startsWith("https://api.venice.ai/"), "only Venice is paid: " + url);
+    veniceCalls += 1;
     return { choices: [{ finish_reason: "stop", message: { content: '{"ok":false}' } }] };
   };
   try {
     await assert.rejects(analyzeStructured("Complete source", { type: "object" }, (value) => { if (value.ok !== true) throw new Error("result.ok: invalid type"); }, { env, transport, outputTokens: 1000 }), /No analysis provider completed/);
   } finally { console.warn = warn; }
-  assert.equal(openaiCalls, 2, "one paid repair, plus the one paid semantic reading itself");
+  assert.equal(veniceCalls, 2, "one paid repair, plus the one paid semantic reading itself");
   assert.ok(logged.some((line) => /^\[bond-analysis-invalid\] gemini\/gemini-3\.8-flash \[GEMINI_API_KEY_2\] /.test(line)), "what the model got wrong is visible at once: " + logged.slice(0, 2).join(" | "));
-  assert.ok(logged.every((line) => !/\bk[2-8]\b|oa\b/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
+  assert.ok(logged.every((line) => !/\bk[2-8]\b|vn\b|oa\b/.test(line.replace(/GEMINI_API_KEY_\d/g, ""))), "no key value is ever logged");
 });
 
 test("A semantic validation failure skips schema repair and moves straight to the next semantic candidate", async () => {

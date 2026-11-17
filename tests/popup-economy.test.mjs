@@ -73,7 +73,7 @@ test("Unprompted DMs: 'text me', no follow-back and unfollow always come; any ot
   /* R99: follow / unfollow DMs one at a time, and a character asks about the same follow-back only once a week */
   assert.match(source, /if \(now\(\) - \(Number\(state\.lastFollowDmAt\) \|\| 0\) < FOLLOW_DM_SPACING_MS\) continue;/);
   assert.match(source, /state\.followBackDmSent\[botId\] = now\(\)/);
-  assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,520}raw = \["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "venice", "openrouter-dm-venice"\]/);
+  assert.match(proxy, /source === "dm" && !playerWaiting\) \{[\s\S]{0,900}raw = \["gemini", "openrouter-dm-dolphin", "openrouter3", "groq", "groq2", "venice"\]/, "R104/R105: an unprompted DM starts on Gemini, and paid Venice is its last net");
 });
 
 test("A spontaneous Event invitation comes at most once a day and is written on free capacity", () => {
