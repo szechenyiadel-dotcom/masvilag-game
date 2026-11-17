@@ -3627,7 +3627,8 @@ function visionRunner() {
     useGroq: false,
     /* R82: free OpenRouter vision on the funded key (1000 free requests a day) */
     openRouter: {
-      key: process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY || "",
+      /* R107: the first OpenRouter key that is not resting (key 2 refused -> key 1), read at every image */
+      get key() { const first = openRouterKeys()[0]; return first ? first.key : ""; },
       /* R107: free OpenRouter vision models only */
       models: (() => {
         const named = String(process.env.OPENROUTER_VISION_MODELS || "").split(",").map((x) => x.trim()).filter((m) => m === "openrouter/free" || /:free$/i.test(m));
@@ -5098,16 +5099,24 @@ function openRouterFreeModel(value, fallback, slot) {
 
 /* R107: OpenRouter key 2 first (the funded account had 1000 free requests a day), and when that key is refused
    (401/403: deleted or the account is gone) key 1 takes the same request; a refused key rests for an hour. */
+/* rested by the key itself, so the same key put in both slots is not sent again through the other slot */
 const OPENROUTER_KEY_REST = new Map();
 function openRouterKeys() {
   const keys = [];
   for (const slot of ["OPENROUTER_API_KEY_2", "OPENROUTER_API_KEY"]) {
     const key = String(process.env[slot] || "").trim();
     if (!key || keys.some((k) => k.key === key)) continue;
-    if ((OPENROUTER_KEY_REST.get(slot) || 0) > Date.now()) continue;
+    if ((OPENROUTER_KEY_REST.get(key) || 0) > Date.now()) continue;
     keys.push({ slot, key });
   }
   return keys;
+}
+/* only a refusal of the KEY rests it: a 401, or a 403 that is not a moderation flag on the input */
+function openRouterKeyRefused(result) {
+  const status = Number(result?.status);
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  return !/moderat|flagged|content policy|safety/i.test(JSON.stringify(result?.payload || {}));
 }
 async function proxyOpenRouterFree(provider, model, body) {
   const keys = openRouterKeys();
@@ -5115,8 +5124,8 @@ async function proxyOpenRouterFree(provider, model, body) {
   let result;
   for (const { slot, key } of keys) {
     result = await proxyCompatibleMessage(provider, key, model, OPENROUTER_CHAT_URL, body);
-    if (result?.ok || ![401, 403].includes(Number(result?.status))) return result;
-    OPENROUTER_KEY_REST.set(slot, Date.now() + 3600e3);
+    if (result?.ok || !openRouterKeyRefused(result)) return result;
+    OPENROUTER_KEY_REST.set(key, Date.now() + 3600e3);
     console.warn("[ai-provider] openrouter-key-refused", "slot=" + slot, "status=" + result?.status, "trying the other key");
   }
   return result;
@@ -5227,7 +5236,15 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
           ? { ...buildCompatibleChatPayload(providerBody, model), reasoning: { enabled: false, exclude: true } }
           : provider === "venice"
             /* R103: no Venice house system prompt on top of ours */
-            ? { ...buildCompatibleChatPayload(providerBody, model), venice_parameters: { include_venice_system_prompt: false } }
+            /* R107: structured background writing (feed, comments …) at a calmer temperature — at full heat the
+               role-play model mixed random scripts and placeholders into the JSON */
+            ? (() => {
+                const payload = buildCompatibleChatPayload(providerBody, model);
+                const chat = source === "dm" || source === "scene";
+                const cap = chat ? 0.9 : 0.6;
+                payload.temperature = Math.min(Number.isFinite(payload.temperature) ? payload.temperature : cap, cap);
+                return { ...payload, venice_parameters: { include_venice_system_prompt: false } };
+              })()
             : buildCompatibleChatPayload(providerBody, model)),
       signal: ctrl.signal,
     });

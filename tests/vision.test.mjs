@@ -283,7 +283,8 @@ test("R82: the post-image prompt names the outfit exactly (bikini, lingerie, shi
   const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.equal((app.match(/Name the outfit EXACTLY \(e\.g\. bikini, swimsuit, lingerie/g) || []).length, 2);
   const proxy = fs.readFileSync(new URL("../server/proxy.js", import.meta.url), "utf8");
-  assert.match(proxy, /openRouter: \{\n\s+key: process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
+  /* R107: the first OpenRouter key that is not resting, read at every image */
+  assert.match(proxy, /get key\(\) \{ const first = openRouterKeys\(\)\[0\]; return first \? first\.key : ""; \}/);
 });
 
 test("R85: with useGroq off, Groq is never asked for a picture", async () => {
