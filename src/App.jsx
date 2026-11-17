@@ -4757,6 +4757,41 @@ function safeAiComments(out) {
     .filter((c) => c && typeof c === "object");
 }
 
+/* R118: a comment-reply answer written as ONE line — {"reply":"…"}, {"comment":"…"}, {"content":"…"},
+   {"response":"Manon Cartier: \"…\""} — or as rows that name their writer under "author" was thrown away, because only
+   {"comments":[{"id":…,"text":…}]} was read, so the player's comment stayed unanswered. The line becomes a reply row:
+   by the character it names ("Name: …" or author/character), otherwise by the expected responder. */
+function commentReplyAnswerAsComments(w, out, fallbackId) {
+  if (!out || typeof out !== "object" || Array.isArray(out)) return out;
+  const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : "");
+  const writerOf = (row) => str(row && row.author) || str(row && row.character) || str(row && row.speaker) || str(row && row.from) || str(row && row.authorId) || str(row && row.author_id);
+  const splitNamed = (line) => {
+    const m = String(line).match(/^\s*([^:"“”\n]{2,40}):\s*["“]?([\s\S]*?)["”]?\s*$/u);
+    if (!m) return { who: "", text: line };
+    const who = findChar(w, m[1].trim());
+    return who ? { who, text: m[2].trim() } : { who: "", text: line };
+  };
+  const listed = Array.isArray(out.comments) ? out.comments : (Array.isArray(out.replies) ? out.replies : null);
+  if (listed) {
+    const rows = listed.filter((r) => r && typeof r === "object").map((r) => {
+      const text = str(r.text) || str(r.comment) || str(r.reply) || str(r.content);
+      if (!text) return r;
+      const hasId = r.id !== undefined && r.id !== null && String(r.id).trim() && findChar(w, r.id);
+      if (hasId || (r.name !== undefined && findChar(w, r.name))) return { ...r, text };
+      const named = splitNamed(text);
+      const who = findChar(w, writerOf(r)) || named.who;
+      return who ? { ...r, id: who, text: named.who ? named.text : text } : { ...r, text };
+    });
+    return { ...out, comments: rows };
+  }
+  const line = str(out.reply) || str(out.comment) || str(out.text) || str(out.content) || str(out.response) || str(out.message) || str(out.answer);
+  if (!line) return out;
+  const named = splitNamed(line);
+  const who = findChar(w, writerOf(out) || (out.id !== undefined ? out.id : "")) || named.who || fallbackId;
+  if (!who || isHuman(w, who)) return out;
+  return { ...out, comments: [{ id: who, text: named.who ? named.text : line }] };
+}
+
 function safeAiChanges(out) {
   return safeAiArray(out, "changes")
     .filter((ch) => ch && typeof ch === "object");
@@ -28987,6 +29022,9 @@ Formátum:
 }${commentReplyLatestTail(w, post, comment)}${TAIL}`,
     { memory: backgroundMemory(w, cast.map((c) => c.id)), maxTokens: 900, participants: [...cast.map((c) => c.id), post.authorId, comment.authorId], commenters: cast.map((c) => c.id) }
   );
+
+  /* R118: a one-line answer ({"reply":…}, {"comment":…}, {"content":…}) is still this reply */
+  out = commentReplyAnswerAsComments(w, out, (forcedResponder || directResponder || cast[0] || {}).id || "");
 
   /*
    * v40 FRIENDLY SOCIAL REPAIR
