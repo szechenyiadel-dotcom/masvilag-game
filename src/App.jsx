@@ -55,7 +55,9 @@ const CSS = `
   color:var(--text); font-family:var(--sans); font-size:15px; line-height:1.5;
 }
 .mv-wrap { width:100%; max-width:560px; margin:0 auto; flex:1; display:flex; flex-direction:column; min-height:0; }
-.mv-main { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:0 14px 90px; }
+/* R109: no -webkit-overflow-scrolling here — on iPhone it trapped every full-screen layer (editor, composer, popups)
+   inside the main column; iOS scrolls with momentum without it */
+.mv-main { flex:1; overflow-y:auto; padding:0 14px 90px; }
 .mv-main::-webkit-scrollbar { width:6px; }
 .mv-main::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px; }
 
@@ -32311,7 +32313,11 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
 
 
 
-  return (
+  /* R109: the editor is put straight into the app root (.mv), not inside the scrolling main column — on iPhone a
+     "fixed" layer inside that touch-scrolling column was clipped to it (app header and tab bar stayed on top, Save
+     out of reach) */
+  const editorRoot = typeof document !== "undefined" ? document.querySelector(".mv") : null;
+  const editor = (
     <div
       className="scrim char-edit-scrim"
       onScroll={trackSection}
@@ -32524,6 +32530,7 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
       </div>
     </div>
   );
+  return editorRoot ? createPortal(editor, editorRoot) : editor;
 }
 
 /* Album megtekintése — a karakter lapján és a saját profilodnál. */
