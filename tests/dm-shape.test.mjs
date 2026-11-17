@@ -168,3 +168,13 @@ test("R113: deleting a character takes their posts, comments, DM threads, follow
   assert.deepEqual(Object.keys(n.rels), ["a>me"]);
   assert.match(source, /if \(out\.deleted\[a\] \|\| \(b && out\.deleted\[b\]\)\) delete out\.chats\[k\]/);
 });
+
+test("R115: two different people never post the same comment under one post", () => {
+  const ctx = vm.createContext({ String, Array, reportClientDiag: () => {}, isNearDuplicateCommentText: (a, b) => String(a).toLowerCase().replace(/\W+/g, "") === String(b).toLowerCase().replace(/\W+/g, "") });
+  vm.runInContext(pick(["commentEchoesAnother"]), ctx);
+  const post = { comments: [{ authorId: "a", text: "Who are you with right now?" }] };
+  assert.equal(ctx.commentEchoesAnother(post, { authorId: "b", text: "who are you with right now" }), true);
+  assert.equal(ctx.commentEchoesAnother(post, { authorId: "a", text: "who are you with right now" }), false, "the own-repeat guard handles one's own lines");
+  assert.equal(ctx.commentEchoesAnother(post, { authorId: "b", text: "Drink some water." }), false);
+  for (const site of ["if (commentEchoesAnother(p, made)) return;", "if(commentEchoesAnother(post,made))return;", "if (commentEchoesAnother(post, made)) return;", "if (commentEchoesAnother({ comments: made }, row)) return;"]) assert.ok(source.includes(site), site);
+});
