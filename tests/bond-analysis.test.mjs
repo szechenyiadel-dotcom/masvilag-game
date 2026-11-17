@@ -1278,3 +1278,11 @@ test("The reading runs whatever tab is open: an always-mounted reader, started b
   // It sits before the sign-in screen's early return, so React always runs the same hooks.
   assert.ok(start < source.indexOf("<Boot onReady={signIn}"), "before the early return of the App component");
 });
+
+test("R107: a sheet reading's Nemotron slot keeps to free OpenRouter models; a paid OPENROUTER_MODEL_3 falls back to the free default", () => {
+ const config = { OPENROUTER_API_KEY: "or", GEMINI_API_KEY_2: "g2", GEMINI_ANALYSIS_MODEL: "pro-x", BOND_ANALYSIS_VENICE: "off" };
+ const nemotron = (env) => providerCandidates(env, "semantic").find(c => c.name === "openrouter").model;
+ assert.equal(nemotron(config), "nvidia/nemotron-3-super-120b-a12b:free");
+ assert.equal(nemotron({ ...config, OPENROUTER_MODEL_3: "nvidia/nemotron-3-super-120b-a12b" }), "nvidia/nemotron-3-super-120b-a12b:free", "a paid name is ignored");
+ assert.equal(nemotron({ ...config, OPENROUTER_MODEL_3: "meta-llama/llama-x:free" }), "meta-llama/llama-x:free", "a free one is used");
+});

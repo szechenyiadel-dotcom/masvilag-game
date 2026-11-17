@@ -12,7 +12,8 @@
 
 /* Mistral and the paid Venice DM route are billed per use; Dolphin3.0 :free and Nemotron :free stay
    available to background work. The paid Gemini key is handled separately by selectGeminiKeys. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter-dm-venice", "venice", "mistral", "mistral2"]));
+/* R107: "openrouter-dm-venice" runs the FREE Venice: Uncensored now — it is not a paid provider any more */
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "venice", "mistral", "mistral2"]));
 
 /* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
    comments): free providers only, best first. */
