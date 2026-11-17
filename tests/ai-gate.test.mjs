@@ -94,7 +94,7 @@ test("Reading a whole sheet: when Gemini cannot, the free models try, then the p
   assert.ok(order.includes("openrouter3") && order.includes("openrouter-dm-dolphin"), "the free OpenRouter models were tried first: " + order);
   assert.ok(order.indexOf("openrouter-dm-venice") > order.indexOf("openrouter3"), "and the paid one after them");
   assert.ok(!order.includes("mistral") && !order.includes("mistral2"), "never Mistral for a sheet");
-  assert.deepEqual(Array.from(context.paidBackgroundProviders("character-bible")), ["openrouter-dm-venice", "openai"]);
+  assert.deepEqual(Array.from(context.paidBackgroundProviders("character-bible")), ["venice", "openrouter-dm-venice", "openai"]);
   assert.deepEqual(Array.from(context.paidBackgroundProviders("feed-post")), ["openai"], "other writing: OpenAI only, as the last one");
   assert.deepEqual(Array.from(context.paidBackgroundProviders("popup")), [], "popups never");
 });
@@ -898,10 +898,10 @@ test("Final OpenRouter routing: the first slot runs Gemma 4 31B (free) on the fu
   assert.match(source, /provider === "openrouter-dm-dolphin"\) return proxyCompatibleMessage\("openrouter-dm-dolphin", process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY/);
   assert.match(source, /provider === "openrouter-dm-venice"\) return proxyCompatibleMessage\("openrouter-dm-venice", process\.env\.OPENROUTER_API_KEY_2/);
   assert.match(source, /const openRouter3Key = process\.env\.OPENROUTER_API_KEY_2 \|\| process\.env\.OPENROUTER_API_KEY;\n\s+let result = await proxyCompatibleMessage\("openrouter3", openRouter3Key/, "R78: Nemotron on the funded key 2");
-  assert.match(source, /raw = \["openrouter-dm-venice", "mistral", "mistral2"\]/, "DM and scene: the paid OpenRouter route, Mistral 1, Mistral 2");
+  assert.match(source, /raw = \["venice", "openrouter-dm-venice", "mistral", "mistral2"\]/, "DM and scene (R103): direct Venice, the paid OpenRouter route, Mistral 1, Mistral 2");
   assert.match(source, /provider === "openrouter-dm-dolphin"\n\s+\/\* R74[^\n]*\*\/\n\s+\? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ enabled: false, exclude: true \} \}/);
-  assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"\]/, "reading a sheet: Gemini, the other free models, the paid OpenRouter route, OpenAI last");
-  assert.match(source, /raw = \["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"\]/, "comments and posts: Gemma, Gemini, Groq, OpenAI last");
+  assert.match(source, /raw = \["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "venice", "openrouter-dm-venice", "openai"\]/, "reading a sheet: Gemini, the other free models, the paid OpenRouter route, OpenAI last");
+  assert.match(source, /raw = \["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai", "venice"\]/, "comments and posts: Gemma, Gemini, Groq, OpenAI, direct Venice last (R103)");
 });
 
 test("Comments use the free Gemini keys only, even when the player is waiting; a DM may still reach the paid key", async () => {
@@ -939,4 +939,11 @@ test("A JSON request answered without any JSON goes on to the next provider; a c
 test("Nemotron gets a short hidden reasoning pass, and on comments/replies 15 s before the next provider takes over", () => {
   assert.match(source, /provider === "openrouter3"\n        \? \{ \.\.\.buildCompatibleChatPayload\(providerBody, model\), reasoning: \{ effort: "low", exclude: true \} \}/);
   assert.match(source, /: source === "comments"\n[^\n]*\n          \? Math\.min\(baseTimeout, 15000\)/);
+});
+
+test("R103: Venice directly — VENICE_API_KEY, api.venice.ai, no Venice system prompt, the 1.2 uncensored model by default", () => {
+  assert.match(source, /const VENICE_CHAT_URL = "https:\/\/api\.venice\.ai\/api\/v1\/chat\/completions";/);
+  assert.match(source, /if \(provider === "venice"\) return String\(process\.env\.VENICE_MODEL \|\| "venice-uncensored-1-2"\)\.trim\(\);/);
+  assert.match(source, /venice_parameters: \{ include_venice_system_prompt: false \}/);
+  assert.match(source, /if \(provider === "venice"\) return Boolean\(String\(process\.env\.VENICE_API_KEY \|\| ""\)\.trim\(\)\);/);
 });

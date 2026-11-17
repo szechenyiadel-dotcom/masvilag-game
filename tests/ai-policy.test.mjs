@@ -467,7 +467,7 @@ test("An answer is never mistaken for a refusal: JSON, fenced JSON, long prose, 
 /* ---------- the paid providers' ceiling and the usage meter ---------- */
 
 test("The paid providers are the two Mistral keys and the two OpenRouter DM routes, and the ceiling defaults to 60,000 characters", () => {
-  assert.deepEqual([...PAID_INPUT_PROVIDERS].sort(), ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice"]);
+  assert.deepEqual([...PAID_INPUT_PROVIDERS].sort(), ["mistral", "mistral2", "openrouter-dm-dolphin", "openrouter-dm-venice", "venice"]);
   assert.equal(DEFAULT_PAID_MAX_INPUT_CHARS, 60000);
   assert.equal(paidMaxInputChars({}), 60000);
   assert.equal(paidMaxInputChars({ PAID_MAX_INPUT_CHARS: "" }), 60000);

@@ -5077,6 +5077,8 @@ function groqSiblingReady(provider) {
     providerCooldownMs("groq2") <= 0;
 }
 
+const VENICE_CHAT_URL = "https://api.venice.ai/api/v1/chat/completions";
+
 async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
   if (!apiKey || !model) return { unavailable: true, provider, model: model || "" };
 
@@ -5180,7 +5182,10 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
         : provider === "openrouter-dm-dolphin"
           /* R74: Gemma 4 answers much faster with thinking off */
           ? { ...buildCompatibleChatPayload(providerBody, model), reasoning: { enabled: false, exclude: true } }
-          : buildCompatibleChatPayload(providerBody, model)),
+          : provider === "venice"
+            /* R103: no Venice house system prompt on top of ours */
+            ? { ...buildCompatibleChatPayload(providerBody, model), venice_parameters: { include_venice_system_prompt: false } }
+            : buildCompatibleChatPayload(providerBody, model)),
       signal: ctrl.signal,
     });
     const raw = await r.text();
@@ -5250,6 +5255,8 @@ function providerModel(provider, body = {}) {
     /* The paid OpenRouter route of DMs and scenes. OPENROUTER_DM_PAID_MODEL puts a stronger model in this slot. */
     return String(process.env.OPENROUTER_DM_PAID_MODEL || "cognitivecomputations/dolphin-mistral-24b-venice-edition").trim();
   }
+  /* R103: Venice directly (venice.ai, VENICE_API_KEY) — the same uncensored Venice model the paid OpenRouter slot used */
+  if (provider === "venice") return String(process.env.VENICE_MODEL || "venice-uncensored-1-2").trim();
   if (provider === "openrouter3") return String(process.env.OPENROUTER_MODEL_3 || "nvidia/nemotron-3-super-120b-a12b:free").trim();
   if (provider === "openrouter") return String(process.env.OPENROUTER_MODEL || "openrouter/free").trim();
   if (provider === "openrouter2") return String(process.env.OPENROUTER_MODEL_2 || "openrouter/free").trim();
@@ -5300,6 +5307,14 @@ async function callMessageProvider(provider, body) {
   /* R74: on the funded account's key (1,000 free requests a day there instead of 50), key 1 if there is no key 2 */
   if (provider === "openrouter-dm-dolphin") return proxyCompatibleMessage("openrouter-dm-dolphin", process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY, providerModel("openrouter-dm-dolphin", body), "https://openrouter.ai/api/v1/chat/completions", body);
   if (provider === "openrouter-dm-venice") return proxyCompatibleMessage("openrouter-dm-venice", process.env.OPENROUTER_API_KEY_2, providerModel("openrouter-dm-venice", body), "https://openrouter.ai/api/v1/chat/completions", body);
+  if (provider === "venice") {
+    const veniceKey = String(process.env.VENICE_API_KEY || "").trim().replace(/^Bearer\s+/i, "");
+    const first = await proxyCompatibleMessage("venice", veniceKey, providerModel("venice", body), VENICE_CHAT_URL, body);
+    /* an older account may not know the 1.2 name yet: one more try with the plain one */
+    const unknownModel = !first?.ok && (first?.status === 400 || first?.status === 404) && /model/i.test(JSON.stringify(first?.payload || {}));
+    if (unknownModel && !process.env.VENICE_MODEL) return proxyCompatibleMessage("venice", veniceKey, "venice-uncensored", VENICE_CHAT_URL, body);
+    return first;
+  }
   if (provider === "openai") {
     const result = await proxyOpenAIMessage(body);
     return { ...result, provider: "openai", model: providerModel("openai", body) };
@@ -5319,6 +5334,7 @@ function configuredAIProvider(provider) {
   if (provider === "groq2") return Boolean(GROQ_API_KEY_2 && (GROQ_MODEL_2 || GROQ_MODEL));
   if (provider === "openrouter-dm-dolphin") return Boolean(process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY);
   if (provider === "openrouter-dm-venice") return Boolean(process.env.OPENROUTER_API_KEY_2);
+  if (provider === "venice") return Boolean(String(process.env.VENICE_API_KEY || "").trim());
   if (provider === "gemini") return GEMINI_KEYS.length > 0;
   if (provider === "openrouter3") return Boolean((process.env.OPENROUTER_API_KEY_2 || process.env.OPENROUTER_API_KEY) && process.env.OPENROUTER_MODEL_3);
   if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API_KEY);
@@ -5669,7 +5685,7 @@ function providerAllowedForBody(provider, body) {
   if (chars <= AI_GROQ_MAX_INPUT_CHARS) return true;
   return provider === "mistral" || provider === "mistral2" || provider === "gemini" || provider === "openai" ||
     provider === "openrouter3" || provider === "openrouter" || provider === "openrouter2" ||
-    provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice";
+    provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice" || provider === "venice";
 }
 
 /* Provider roles are intentionally strict.
@@ -5708,13 +5724,13 @@ function taskProviderOrder(requestedProvider, body) {
        Dolphin -> Nemotron -> free Gemini -> Groq 1 -> Groq 2 (when it fits). */
     /* R78: when every free one is out (Gemma 429, Nemotron daily cap, Gemini overloaded) a triggered DM ("text me",
        no follow-back, unfollow) still arrives through paid Venice — R71 already keeps these to a handful an hour. */
-    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "openrouter-dm-venice"];
+    raw = ["openrouter-dm-dolphin", "openrouter3", "gemini", "groq", "groq2", "venice", "openrouter-dm-venice"];
     /* R84: Groq only when it can take the WHOLE prompt — on a cut-down one it wrote a comment instead of the DM */
     if (!groqCarriesWhole(groqRequestSize(body))) raw = raw.filter((provider) => provider !== "groq" && provider !== "groq2");
   } else if (source === "dm") {
     /* A reply the player is waiting on (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2.
        The free Gemma slot is left out: it answered 429 to every one of its last 200 requests. */
-    raw = ["openrouter-dm-venice", "mistral", "mistral2"];
+    raw = ["venice", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
        waiting on it (reroll / own answer). */
@@ -5722,18 +5738,19 @@ function taskProviderOrder(requestedProvider, body) {
     raw = ["gemini", "groq", "groq2", "openrouter3"];
   } else if (source === "scene") {
     /* Scenes (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2. */
-    raw = ["openrouter-dm-venice", "mistral", "mistral2"];
+    raw = ["venice", "openrouter-dm-venice", "mistral", "mistral2"];
   } else if (isComment) {
     /* Comments and posts (the owner's rule): Gemma (OpenRouter, free) -> every Gemini key and model -> paid OpenAI last.
        Groq 1 and 2 (free) sit before OpenAI as a safety net: with the free Gemma answering 429 and Gemini overloaded, a
        chain that ended on an OpenAI key out of credit left every comment and every post unwritten. */
-    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"];
+    /* R103: direct Venice (paid) as the very last net, after the OpenAI key that has no credit left */
+    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai", "venice"];
   } else if (isFeed) {
-    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai"];
+    raw = ["openrouter-dm-dolphin", "gemini", "groq", "groq2", "openai", "venice"];
   } else if (characterKnowledgeSources.has(source)) {
     /* Canon/identity knowledge (reading a whole character sheet is important): Gemini; if it cannot, the other free models
        (Groq when the sheet fits it, Nemotron, Gemma); then the paid OpenRouter route; OpenAI as the very last one. */
-    raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "openrouter-dm-venice", "openai"];
+    raw = ["gemini", "groq", "groq2", "openrouter3", "openrouter-dm-dolphin", "venice", "openrouter-dm-venice", "openai"];
   } else if (isGroqUtilitySource(source)) {
     /* Analysis, classification and translation (never a character's voice) go to Groq first when Groq can
        take the WHOLE request (the pacer keeps them from running side by side); free Gemini after it. A
@@ -5955,7 +5972,7 @@ async function executeAITask(task) {
     const askedForJson = result?.ok && requestExpectsJson(task.body);
     const dmOpenRouterProvider =
       kindOfRequest === "dm" &&
-      (provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice");
+      (provider === "openrouter-dm-dolphin" || provider === "openrouter-dm-venice" || provider === "venice");
     const refusedByText =
       (askedForJson && looksLikeRefusal(answerText(result))) ||
       (dmOpenRouterProvider && result?.ok && looksLikeRefusal(answerText(result)));

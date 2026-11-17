@@ -12,7 +12,7 @@
 
 /* Mistral and the paid Venice DM route are billed per use; Dolphin3.0 :free and Nemotron :free stay
    available to background work. The paid Gemini key is handled separately by selectGeminiKeys. */
-export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter-dm-venice", "mistral", "mistral2"]));
+export const PAID_PROVIDERS = Object.freeze(new Set(["openai", "anthropic", "openrouter-dm-venice", "venice", "mistral", "mistral2"]));
 
 /* What a request that nobody is waiting for may use for roleplay-style writing (DMs, scenes,
    comments): free providers only, best first. */
@@ -32,7 +32,7 @@ export function isForegroundRequest(body) {
 export const PAID_LAST_RESORT_PROVIDERS = Object.freeze(["openai"]);
 /* Reading a whole character sheet matters more than what it costs: when Gemini and the free models cannot do it, the paid
    OpenRouter route reads it (OpenRouter is the first paid provider), and OpenAI after that. */
-export const PAID_SHEET_READING_PROVIDERS = Object.freeze(["openrouter-dm-venice", "openai"]);
+export const PAID_SHEET_READING_PROVIDERS = Object.freeze(["venice", "openrouter-dm-venice", "openai"]);
 export function paidBackgroundProviders(source, isUtility = false) {
   const kind = String(source || "").trim().toLowerCase();
   if (SHEET_READING_SOURCES.includes(kind)) return PAID_SHEET_READING_PROVIDERS;
@@ -525,7 +525,7 @@ export function looksLikeRefusal(text) {
 
 /* The two 33K-context DM OpenRouter routes keep the same prompt ceiling as Mistral so a huge DM cannot
    overflow them. Nemotron is deliberately absent: its free route has a 1M context and is used as Gemini fallback. */
-export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter-dm-dolphin", "openrouter-dm-venice", "mistral", "mistral2"]));
+export const PAID_INPUT_PROVIDERS = Object.freeze(new Set(["openrouter-dm-dolphin", "openrouter-dm-venice", "venice", "mistral", "mistral2"]));
 export const DEFAULT_PAID_MAX_INPUT_CHARS = 60000;   /* roughly 15-20k tokens */
 
 /* PAID_MAX_INPUT_CHARS in the environment; 0 switches the ceiling off. */
