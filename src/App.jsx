@@ -8749,12 +8749,41 @@ function sceneRolesCard(w, scene) {
 
 /* a speech line in which the speaker names themself in the third person
    ("…the only ones who could handle it — Tandy and Lennon…" said by Lennon) */
+/* R117: every name a character goes by besides the first name — nickname field, aliases, and a nickname written into
+   the full name (Eli "Hawk" Moskowitz). Eli and Hawk are ONE person. */
+function characterOtherNames(c) {
+  if (!c) return [];
+  const first = String(c.name || "").trim().split(/\s+/)[0] || "";
+  const quoted = [...String(c.name || "").matchAll(/["“'‘]([^"”'’]{2,30})["”'’]/g)].map((m) => m[1].trim());
+  const out = [];
+  for (const n of [...characterIdentityNicknameParts(c), ...quoted]) {
+    const v = String(n || "").replace(/^@/, "").trim();
+    if (!v || v.toLowerCase() === first.toLowerCase()) continue;
+    if (!out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
+  }
+  return out;
+}
+
+/* R117: tells the model who is who in a group chat — one person per line, every name they go by — so a nickname is
+   never answered as a second person and nobody talks about themself by name */
+function groupCastIdentityBlock(w, ids) {
+  const en = worldLanguage(w, w && w.meId) === "en";
+  const rows = (ids || []).map((id) => charById(w, id)).filter(Boolean).map((c) => {
+    const other = characterOtherNames(c);
+    return "- " + c.name + (other.length ? (en ? " = also called " : " = más néven ") + other.map((n) => "\"" + n + "\"").join(", ") + (en ? " (the SAME person)" : " (UGYANAZ a személy)") : "");
+  });
+  if (!rows.length) return "";
+  return en
+    ? "WHO IS IN THIS GROUP CHAT (one line = one person):\n" + rows.join("\n") + "\n- A nickname is NEVER a different person: nobody greets, questions or attacks their own nickname as if someone else had joined.\n- Everyone speaks as \"I\": nobody writes their own name or nickname about themself (never \"Nam-gyu will deal with you\" from Nam-gyu — he says \"I'll deal with you\").\n- Address by name only people who are in this group; someone outside it can be talked about, not talked to."
+    : "KIK VANNAK EBBEN A GROUP CHATBEN (egy sor = egy ember):\n" + rows.join("\n") + "\n- Egy becenév SOHA nem egy másik ember: senki nem köszönti, kérdezi vagy támadja a saját becenevét, mintha valaki más lépett volna be.\n- Mindenki E/1-ben beszél: senki nem írja le a saját nevét vagy becenevét magáról (Nam-gyu soha nem írja, hogy „Nam-gyu majd elintéz” — azt írja, „majd én elintézlek”).\n- Néven csak a csoport tagjait szólítsák meg; aki nincs benne, arról lehet beszélni, de hozzá nem.";
+}
+
 function sceneSpeechSelfThirdPerson(w, speakerId, text) {
   const c = charById(w, speakerId);
   if (!c || isHuman(w, speakerId)) return false;
   const spoken = String(text || "").replace(/\*[^*]*\*/g, " ");
   const first = String(c.name || "").split(/\s+/)[0];
-  const names = [...new Set([first, nicknameInfo(c.nick).name].filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n)))];
+  const names = [...new Set([first, nicknameInfo(c.nick).name, ...characterOtherNames(c)].filter((n) => n && n.length >= 3 && /^\p{Lu}/u.test(n)))];
   return names.some((n) => {
     const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp("(^|[^\\p{L}])" + esc + "(?=$|[^\\p{L}])", "u");
@@ -37321,6 +37350,8 @@ ISMÉTLÉSVÉDELEM:
 - A példákból a karakter ritmusát, szóhasználatát, humorát, közvetlenségét, nyersességét és kommunikációs szokásait tanuld meg.
 - Minden konkrét üzenet legyen friss és az aktuális beszélgetésből szülessen.
 
+${groupCastIdentityBlock(w, groupAiIds)}
+
 NYELVTAN ÉS NÉZŐPONT:
 
 - Minden karakter magáról E/1-ben beszéljen.
@@ -37395,6 +37426,13 @@ Formátum:
           );
 
         if (!body) return null;
+
+        /* R117: a member who answers their own nickname as someone else ("Hawk?!" from Eli) or talks about
+           themself by name ("Nam-gyu will deal with you") does not get that line into the chat */
+        if (sceneSpeechSelfThirdPerson(w, id, body)) {
+          reportClientDiag("group-self-name", { speaker: id, text: body.slice(0, 120) });
+          return null;
+        }
 
         const to =
           findChar(
@@ -55348,6 +55386,8 @@ ISMÉTLÉSVÉDELEM:
 - A példákból a ritmust, szóhasználatot, humort, nyersességet, közvetlenséget és kommunikációs szokásokat tanuld meg.
 - A karakter legyen felismerhető, de minden konkrét üzenete legyen friss.
 
+${groupCastIdentityBlock(w, memberIds)}
+
 NYELVTAN ÉS NÉZŐPONT:
 
 - Minden karakter magáról E/1-ben beszéljen.
@@ -57264,6 +57304,8 @@ if (targetNote) {
           );
 
         if (!text) return null;
+        /* R117: same self-name guard as the interactive group chat */
+        if (sceneSpeechSelfThirdPerson(view, who, text)) return null;
 
         const explicitTo = findChar(view, r && r.to);
         return {
