@@ -6250,23 +6250,41 @@ function stripForeignScriptWords(requestText, answer) {
   return out.replace(/[ \t]{2,}/g, " ").replace(/ +([,.!?])/g, "$1");
 }
 
+/* R116: a request the player is waiting on (scene turn, DM reply — priority 90+) always finds a free slot: background
+   work may fill at most all-but-one of the regular slots, and a waiting player may use one extra. Before this a scene
+   turn sat behind slow feed/comment/group-chat calls until the app gave up ("The AI did not answer in time"). */
+const AI_GATE_INTERACTIVE_PRIORITY = 90;
+function aiGateTaskIsInteractive(task) {
+  return Number(task && task.priority) >= AI_GATE_INTERACTIVE_PRIORITY;
+}
+function aiGateSlotFree(task) {
+  if (aiGateTaskIsInteractive(task)) return AI_GATE.active < AI_GATE_MAX_CONCURRENT + 1;
+  return AI_GATE.active < AI_GATE_MAX_CONCURRENT && (AI_GATE.activeBackground || 0) < Math.max(1, AI_GATE_MAX_CONCURRENT - 1);
+}
+
 function pumpAIGate() {
-  if (AI_GATE.active >= AI_GATE_MAX_CONCURRENT || !AI_GATE.queue.length) return;
+  if (!AI_GATE.queue.length || AI_GATE.active >= AI_GATE_MAX_CONCURRENT + 1) return;
   const now = Date.now();
   AI_GATE.queue.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
-  const index = AI_GATE.queue.findIndex((t) => t.notBefore <= now);
+  const ready = AI_GATE.queue.filter((t) => t.notBefore <= now);
+  const index = AI_GATE.queue.findIndex((t) => t.notBefore <= now && aiGateSlotFree(t));
   if (index < 0) {
+    /* something is ready but every slot it may use is busy: a finishing task pumps again */
+    if (ready.length) return;
     scheduleAIGate(Math.max(1, Math.min(...AI_GATE.queue.map((t) => t.notBefore)) - now));
     return;
   }
-  const gap = Math.max(0, AI_MIN_REQUEST_GAP_MS - (now - AI_GATE.lastStartAt));
+  /* the pacing gap is for background bursts — a waiting player does not sit through it */
+  const gap = aiGateTaskIsInteractive(AI_GATE.queue[index]) ? 0 : Math.max(0, AI_MIN_REQUEST_GAP_MS - (now - AI_GATE.lastStartAt));
   if (gap > 0) { scheduleAIGate(gap); return; }
 
   const task = AI_GATE.queue.splice(index, 1)[0];
   AI_GATE.active += 1;
+  task.countedAsBackground = !aiGateTaskIsInteractive(task);
+  if (task.countedAsBackground) AI_GATE.activeBackground = (AI_GATE.activeBackground || 0) + 1;
   AI_GATE.lastStartAt = Date.now();
   runAIGateTask(task);
-  if (AI_GATE.queue.length && AI_GATE.active < AI_GATE_MAX_CONCURRENT) scheduleAIGate(AI_MIN_REQUEST_GAP_MS);
+  if (AI_GATE.queue.length && AI_GATE.active < AI_GATE_MAX_CONCURRENT + 1) scheduleAIGate(AI_MIN_REQUEST_GAP_MS);
 }
 
 async function runAIGateTask(task) {
@@ -6281,6 +6299,7 @@ async function runAIGateTask(task) {
   } finally {
     AI_GATE.pendingKeys.delete(task.key);
     AI_GATE.active = Math.max(0, AI_GATE.active - 1);
+    if (task.countedAsBackground) AI_GATE.activeBackground = Math.max(0, (AI_GATE.activeBackground || 0) - 1);
     const cutoff = Date.now() - 60000;
     for (const [key, at] of AI_GATE.recentKeys) if (at < cutoff) AI_GATE.recentKeys.delete(key);
     if (AI_GATE.queue.length) scheduleAIGate(0);
