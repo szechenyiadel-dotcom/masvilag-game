@@ -91,6 +91,20 @@ test("R96: a scene answer with its lines under another key keeps them", () => {
   assert.match(source, /reportClientDiag\("scene-stuck"/);
 });
 
+test("R119: scene lines under actions / sceneUpdates / dialogues (or named by actor) are kept, without doubled speech", () => {
+  const ctx = vm.createContext({ String, Array, Object });
+  vm.runInContext(pick(["normalizeSceneAnswerShape"]), ctx);
+  const n = (o) => JSON.parse(JSON.stringify(ctx.normalizeSceneAnswerShape(o)));
+  const both = n({ actions: [{ id: "max", type: "speech", text: "He stares, then turns to leave." }], dialogue: [{ id: "max", type: "speech", text: "I can't do this, Lennon." }] });
+  assert.deepEqual(both.turns.map((t) => [t.id, t.kind, t.text]), [["max", "action", "He stares, then turns to leave."], ["max", "speech", "I can't do this, Lennon."]]);
+  const dup = n({ actions: [{ id: "max", kind: "scene", text: "He turns away. \"You're my student.\" He reaches for a towel." }], dialogues: [{ id: "max", text: "\"You're my student.\"" }] });
+  assert.equal(dup.turns.length, 1, "the spoken line already inside the action is not repeated");
+  assert.deepEqual(n({ sceneUpdates: [{ id: "max", kind: "action", text: "Maxwell turns away." }], selfUpdates: {} }).turns.map((t) => t.id), ["max"]);
+  assert.deepEqual(n({ actions: [{ actor: "max", target: "len", text: "He grips her hips." }] }).turns.map((t) => [t.id, t.kind]), [["max", "action"]]);
+  assert.deepEqual(n({ dialogues: [{ id: "max", text: "Go home." }] }).turns.map((t) => t.text), ["Go home."]);
+  assert.deepEqual(n({ turns: [{ id: "max", text: "Hi." }], actions: [{ id: "x", text: "ignored" }] }).turns.map((t) => t.id), ["max"], "real turns win");
+});
+
 test("R98: a 'you did not follow back' DM never says the player followed the character", () => {
   const ctx = vm.createContext({ String });
   vm.runInContext(pick(["fixFollowDirection"]), ctx);
