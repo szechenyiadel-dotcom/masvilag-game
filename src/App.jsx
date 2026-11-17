@@ -2119,6 +2119,9 @@ label.f { color:var(--text-dim); font-family:var(--sans); font-weight:600; lette
 .char-edit-header { gap:8px; }
 .char-edit-header h2 { flex:1 1 auto; }
 .char-edit-head-save { display:none; }
+.char-edit-delete { margin-top:22px; padding-top:16px; border-top:1px solid var(--card-line); }
+.char-edit-delete-ask { color:#F07A84 !important; border-color:rgba(240,122,132,.45) !important; }
+.char-edit-delete-yes { background:#C9424E !important; color:#fff !important; border-color:transparent !important; box-shadow:none !important; }
 .char-edit-save-dock { display:none; }
 .char-edit-header h2 { font-family:var(--serif); font-weight:400; font-size:26px !important; letter-spacing:-.01em; margin:0; }
 .char-edit-nav { flex:1 0 100%; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
@@ -18751,7 +18754,8 @@ function mergeWorlds(remote, local) {
     out.chats[k] = a.length >= b.length ? a : b;
   });
   // az összevont profil régi beszélgetései ne jöjjenek vissza
-  Object.keys(out.chats).forEach((k) => { if (out.deleted[k.split("|")[0]]) delete out.chats[k]; });
+  /* R113: a thread with a deleted character goes too (the key is "me|character") */
+  Object.keys(out.chats).forEach((k) => { const [a, b] = k.split("|"); if (out.deleted[a] || (b && out.deleted[b])) delete out.chats[k]; });
 
   // értesítések: fiókonként unió, a frissebb elöl
   out.notify = { ...(remote.notify || {}) };
@@ -32216,6 +32220,9 @@ function CharForm({ initial, onSave, onClose, onDelete, setErr, w, isNew }) {
   const editSheetRef = useRef(null);
   const editNavRef = useRef(null);
   const [editSection, setEditSection] = useState("sec-gen");
+  /* R113: deleting a character of the world (two taps: ask, then confirm) */
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const canDelete = Boolean(onDelete && !isNew && initial && initial.id && w && initial.id !== w.meId && (w.chars || []).some((x) => x && x.id === initial.id));
   const editScrollRaf = useRef(0);
   const editSections = CHAR_EDIT_SECTIONS.filter(([key]) => key !== "sec-bonds" || Boolean(w));
   const jumpToSection = (key) => {
@@ -32519,6 +32526,36 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
           </>
         )}
 
+        {canDelete ? (
+          <div className="char-edit-delete">
+            {confirmDelete ? (
+              <>
+                <p className="hint" style={{ margin: "0 0 8px" }}>
+                  {tt(
+                    `Biztosan törlöd ezt a karaktert: ${initial.name || "névtelen"}? A posztjai, kommentjei, üzenetei és kapcsolatai is eltűnnek ebből a világból. Ez nem vonható vissza (a karaktertáradba mentett példány megmarad).`,
+                    `Delete ${initial.name || "this character"} for good? Their posts, comments, messages and bonds leave this world too. This cannot be undone (a copy saved in your library stays).`
+                  )}
+                </p>
+                <div className="row" style={{ gap: 8 }}>
+                  <button type="button" className="btn char-edit-delete-yes" onClick={() => onDelete(initial.id)}>
+                    <Trash2 size={14} /> {tt("Igen, törlöm", "Yes, delete")}
+                  </button>
+                  <button type="button" className="btn ghost" onClick={() => setConfirmDelete(false)}>{tt("Mégse", "Cancel")}</button>
+                </div>
+              </>
+            ) : (
+              <button type="button" className="btn ghost char-edit-delete-ask" onClick={(e) => {
+                setConfirmDelete(true);
+                /* bring the question and its buttons above the pinned Save bar */
+                const box = e.currentTarget.closest(".char-edit-delete");
+                setTimeout(() => { try { box && box.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (error) { /* ignore */ } }, 30);
+              }}>
+                <Trash2 size={14} /> {tt("Karakter törlése", "Delete character")}
+              </button>
+            )}
+          </div>
+        ) : null}
+
         <div className="mobile-action-bar char-edit-save-inline" style={{ marginTop: 18 }}>
   <button
     className="btn primary full"
@@ -32538,6 +32575,39 @@ Formátum (minden mező szöveg; a titkok legyenek érdekesek és kijátszhatók
     </div>
   );
   return editorRoot ? createPortal(editor, editorRoot) : editor;
+}
+
+/* R113: a character deleted from the world takes their traces with them: posts (marked deleted so a merge keeps them
+   out), their comments, the DM threads with them, follows and bonds. */
+function removeCharacterFromWorld(n, id) {
+  if (!n || !id) return;
+  const stamp = now();
+  if (!n.deleted) n.deleted = {};
+  n.deleted[id] = stamp;
+  n.chars = (n.chars || []).filter((x) => x && x.id !== id);
+  (n.posts || []).forEach((p) => {
+    if (p && p.authorId === id) n.deleted[p.id] = stamp;
+  });
+  n.posts = (n.posts || []).filter((p) => p && p.authorId !== id).map((p) => {
+    if (!p || !Array.isArray(p.comments)) return p;
+    const gone = new Set(p.comments.filter((c) => c && c.authorId === id).map((c) => c.id));
+    if (!gone.size) return p;
+    return { ...p, comments: p.comments.filter((c) => c && !gone.has(c.id) && !gone.has(c.parent)) };
+  });
+  Object.keys(n.chats || {}).forEach((key) => {
+    if (key.split("|").includes(id)) delete n.chats[key];
+  });
+  const unfollow = (person) => {
+    if (!person) return;
+    if (Array.isArray(person.followers)) person.followers = person.followers.filter((x) => x !== id);
+    if (Array.isArray(person.following)) person.following = person.following.filter((x) => x !== id);
+  };
+  (n.chars || []).forEach(unfollow);
+  Object.values(n.players || {}).forEach(unfollow);
+  Object.keys(n.rels || {}).forEach((key) => {
+    const [a, b] = key.split(">");
+    if (a === id || b === id) delete n.rels[key];
+  });
 }
 
 /* Album megtekintése — a karakter lapján és a saját profilodnál. */
@@ -33262,12 +33332,9 @@ function Cast({ w, update, setErr, goChat, jump }) {
       {form && (
         <CharForm initial={form} isNew={formIsNew} setErr={setErr} w={w} onClose={() => setForm(null)}
           onDelete={(id) => {
-            update((n) => {
-              n.chars = n.chars.filter((x) => x.id !== id);
-              if (!n.deleted) n.deleted = {};
-              n.deleted[id] = now();
-            });
+            update((n) => removeCharacterFromWorld(n, id));
             setForm(null);
+            setOpen(null);
           }}
           onSave={(c, relDrafts) => {
             update((n) => {
