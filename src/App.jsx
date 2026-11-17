@@ -11371,11 +11371,15 @@ function commentPublicBehaviorCard(w, c, targetId) {
   return bits.join(" ");
 }
 
+/* R110 (owner's rule): agreement and backing count as warmth too — people who can't stand each other don't write
+   "well said", "so true", "facts" or "proud of you" under each other's posts */
+const SOCIAL_AGREEMENT_RE = /\b(?:well\s+said|so\s+true|facts|this!|agreed|couldn['’]?t\s+agree\s+more|preach|you['’]?re\s+(?:so\s+)?right|you\s+are\s+(?:so\s+)?right|proud\s+of\s+you|love\s+(?:this|that|you)|respect\b|big\s+respect|true\s+that|exactly|absolutely|100\s?%|period(?:t)?|slay(?:ed|ing)?|queen|king|legend|icon(?:ic)?|go\s+off|you\s+go|good\s+for\s+you|happy\s+for\s+you|so\s+deserved|well\s+deserved|nailed\s+it|couldn['’]?t\s+have\s+said\s+it\s+better|így\s+van|egyetértek|pontosan|igazad\s+van|büszke\s+vagyok|imádom|királynő|zseniális)\b/i;
 function socialCommentLooksWarmPraise(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return false;
   return (
     messageLooksLikePositiveSocialReaction(text) ||
+    SOCIAL_AGREEMENT_RE.test(text) ||
     /\b(?:looks?\s+(?:good|great|amazing|stunning|hot)|suits?\s+you|that\s+(?:color|colour|fit|outfit|dress|shirt|look)\s+(?:really\s+)?suits?\s+you|you(?:'re|\s+are)\s+(?:so\s+)?(?:pretty|beautiful|gorgeous|stunning|cute|hot|sexy|handsome)|damn[, ]+.*(?:suits?\s+you|looks?\s+good)|love\s+(?:the|your)\s+(?:look|fit|outfit|dress|hair|makeup))\b/i.test(text) ||
     /(?:😍|🥰|😘|❤️|🩷|💗|💖|💕|🔥)/u.test(text)
   );

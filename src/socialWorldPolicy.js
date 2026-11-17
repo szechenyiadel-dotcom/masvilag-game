@@ -252,6 +252,7 @@ HUNGARIAN OUTPUT:
 const COMMENT_POLICY = `
 COMMENT / REPLY REALISM — HARD CONTRACT
 - Comments, replies, posts and DMs are TYPED TEXT the character sends from their phone: no narration, no *actions*, no third-person description of themselves ("Feng smirks…"), no quotation marks around their own line. Only the line they would actually type. (Exception: a DM where the player writes *roleplay* — then roleplay style is allowed. Scenes are narrated as always.)
+- People who dislike, hate or rival each other (by score, bond or their sheets) never back each other in public: no "well said", "so true", "facts", "proud of you", "love this", no hearts, no agreeing under that person's post or comment. They stay silent or show their real attitude (cold, sarcastic, cutting).
 - Secret arrangements stay secret in public: a fake-dating couple is simply a couple in comments and posts — nobody (not the pair, not friends who know) calls it fake, pretend or an act where others can read it.
 Fresh-post activity is a live conversation, not a single-bot exchange.
 - For a fresh post, comments may keep arriving throughout its configured fresh-comment window.
