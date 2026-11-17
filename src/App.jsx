@@ -37800,6 +37800,10 @@ const DM_MEET_COMMIT_RE = /\b(?:now|right now|be there|on my way|omw|meet (?:you
 const DM_MEET_PLACE_PROPOSAL_RE = /\b(?:come|get|be|show up|pull up|swing by|head|go|meet(?: me| you| up)?|see (?:you|u)|find me|wait for me)\s+(?:to|at|in|on|by|near|outside|downstairs|over to|down to)\s+(?:my|the|our|your|his|her|a|an|this|that)\b|\bmy (?:place|room|apartment|flat|ship|deck|dojo|gym|house|car)\b[^.!?]{0,30}\b(?:tonight|now|later|tomorrow|at|in)\b|(?:gyere|j[oö]jj|tal[aá]lkozzunk|megv[aá]rlak|v[aá]rlak)\b[^.!?]{0,30}(?:hozz[aá]m|n[aá]lam|ott|itt|[aá]ra|este|ma|holnap)/i;
 const DM_MEET_TIME_RE = /\b(?:in|within|after)\s+(?:an?|one|two|three|four|five|ten|fifteen|twenty|thirty|\d+|a few|a couple of)\s*(?:hours?|hrs?|mins?|minutes?)\b|\bat\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:one|an) hour\b|\b(?:tonight|tomorrow|later today|this evening|this afternoon|noon|midnight|o'?clock)\b|(?:\bholnap\b|\bma este\b|\bdélben\b|\b\d{1,2}\s*(?:órakor|óra)\b|\begy óra\b|\b(?:perc|óra)\s*múlva\b)/i;
 const DM_MEET_ACCEPT_RE = /\b(?:fine|ok(?:ay)?|sure|deal|alright|all right|sounds good|works for me|bet|yes|yeah|yep|i'?ll be there|be there|i'?ll come|on time|see (?:you|u)(?: then| there)?|on my way|omw|count me in|i'?m in|good|don'?t (?:be late|make me wait|keep me waiting|test me|stand me up)|better (?:be|show)|i'?ll (?:be )?wait(?:ing)?|waiting (?:for you|there))\b|(?:rendben|persze|megegyezt[uü]nk|ott leszek|ott vagyok|j[oö]v[oö]k|megyek|benne vagyok|[aá]ll az alku|[uú]gy lesz|ne k[eé]sd|ne v[aá]rass|v[aá]rni foglak)/i;
+/* R114: the character is coming to the player ("I'm on my way", "I'm right outside your door. Open up.") */
+const DM_BOT_ARRIVING_RE = /\b(?:on my way|omw|i'?m (?:already |right )?(?:on my way|coming(?: over)?|heading (?:over|to you|your way)|outside|here|downstairs|at your door)|be there (?:in|soon|before)|i'?ll be there|(?:right |just )?outside (?:your|the) (?:door|house|place|building|dorm|room|window|apartment|flat)|open (?:up|the door)|pulling up|almost there|coming (?:over|to you|to get you|for you)|i'?ll (?:come (?:over|to you|get you)|pick you up|get you)|picking you up|don'?t move)\b|(?:[uú]ton vagyok|indulok|mindj[aá]rt ott|ott leszek|az ajt[oó]d el[oő]tt|nyisd ki|[eé]rted megyek|ne mozdulj)/i;
+/* …after the player asked or said yes in some form */
+const DM_PLAYER_CALLS_RE = /\b(?:come(?: here| over| to me| get me| pick me up)?|need you|help me|where are you|hurry|please|can you come|could you come|i'?m (?:scared|alone|home|at)|ok(?:ay)?|yes|yeah|sure|fine)\b|(?:gyere|sz[uü]ks[eé]gem van r[aá]d|seg[ií]ts|hol vagy|siess|f[eé]lek|egyed[uü]l vagyok|igen|ok[eé]?|rendben)/i;
 const DM_MEET_REFUSE_RE = /\b(?:no|nope|nah|never|not (?:happening|going to|a chance)|no way|forget it|dream on)\b|\bi (?:won'?t|can'?t|refuse)\b|(?:nem megyek|kiz[aá]rt|soha|ne [aá]lmodozz)/i;
 
 function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
@@ -37827,7 +37831,10 @@ function agreedDmMeetupBridge(w, bot, ck, playerText, replyText) {
   const botSaysYes = !refused && (theirs.slice(-4).some((x) => DM_MEET_ACCEPT_RE.test(x)) || (playerNamedTime && theirs.slice(-2).some((x) => DM_MEET_TIME_RE.test(x))));
   const playerSide = mine.slice(-4).some((x) => DM_MEET_PROPOSAL_RE.test(x) || DM_MEET_PLACE_PROPOSAL_RE.test(x) || DM_MEET_TIME_RE.test(x) || DM_MEET_COMMIT_RE.test(x));
   const settledInFewWords = placeOrTimeProposed && timeNamed && botSaysYes && playerSide;
-  if (!(proposal && playerCommits && botCommits) && !settledInFewWords) return null;
+  /* R114: the character sets off to the player after the player called or agreed — that is a meetup too */
+  const botArriving = !refused && theirs.slice(-3).some((x) => DM_BOT_ARRIVING_RE.test(x)) &&
+    mine.slice(-4).some((x) => DM_PLAYER_CALLS_RE.test(x) || DM_MEET_PROPOSAL_RE.test(x) || DM_MEET_ACCEPT_RE.test(x));
+  if (!(proposal && playerCommits && botCommits) && !settledInFewWords && !botArriving) return null;
   const en = worldLanguage(w, w.meId) === "en";
   const player = (w.player && w.player.name) || nameOfIn(w, w.meId);
   const transcript = rows.slice(-6).map((m) => (m && m.from === "me" ? player : bot.name) + ": " + String(m && m.text || "").slice(0, 140)).concat([player + ": " + String(playerText || "").slice(0, 140), bot.name + ": " + String(replyText || "").slice(0, 140)]).join(" / ");

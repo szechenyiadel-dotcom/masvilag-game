@@ -18,7 +18,7 @@ function check(thread, playerText, replyText, scenes = []) {
     Math, Number, String, Array, now: () => NOW, worldLanguage: () => "en", nameOfIn: () => "Tandy",
     roleplayInviteIsPending: () => true, roleplayInviteIsAccepted: () => false,
   });
-  vm.runInContext(pick(["DM_MEET_PROPOSAL_RE", "DM_MEET_COMMIT_RE", "DM_MEET_PLACE_PROPOSAL_RE", "DM_MEET_TIME_RE", "DM_MEET_ACCEPT_RE", "DM_MEET_REFUSE_RE", "agreedDmMeetupBridge", "recentDmBridgeScene"]), context);
+  vm.runInContext(pick(["DM_MEET_PROPOSAL_RE", "DM_MEET_COMMIT_RE", "DM_MEET_PLACE_PROPOSAL_RE", "DM_MEET_TIME_RE", "DM_MEET_ACCEPT_RE", "DM_BOT_ARRIVING_RE", "DM_PLAYER_CALLS_RE", "DM_MEET_REFUSE_RE", "agreedDmMeetupBridge", "recentDmBridgeScene"]), context);
   const chats = { ck: thread.map(([from, text], i) => ({ from, text, ts: NOW - (thread.length - i) * 60000 })) };
   const bridge = context.agreedDmMeetupBridge({ chats, scenes, meId: "me", player: { name: "Tandy" } }, { id: "zoro", name: "Zoro" }, "ck", playerText, replyText);
   return bridge ? JSON.parse(JSON.stringify(bridge)) : null;
@@ -73,4 +73,12 @@ test("A refusal of the very answer in hand, or a time that is not the player's, 
   assert.equal(check([["me", "meet me at the dock in one hour"]], "come on", "No. Not happening. One hour? Dream on."), null);
   assert.equal(check([["me", "wanna meet?"]], "so?", "tomorrow I have training"), null, "the player named no time, the answer only mentions one");
   assert.ok(check([["me", "meet me at the dock in one hour"]], "come on", "No. Fine. One hour."), "a yes in the same answer wins over a 'no'");
+});
+
+test("R114: the character setting off to the player after the player called is a meetup ('I'm on my way' / 'I'm right outside your door. Open up.')", () => {
+  assert.ok(check([["me", "can you come? i'm scared"], ["them", "Where are you?"]], "home", "I'm already on my way. Don't move an inch."));
+  assert.ok(check([["me", "please come"], ["them", "I'm already on my way."]], "ok", "I'm right outside your door. Open up."));
+  assert.ok(check([["me", "Gyere át, kérlek"]], "itthon vagyok", "Úton vagyok, ne mozdulj."));
+  assert.equal(check([["me", "how was training?"]], "lol", "Long. I'm here, finally home."), null, "'I'm here' after small talk is no meetup");
+  assert.equal(check([["me", "come over"]], "pls", "No. I'm not coming."), null, "a refusal is no meetup");
 });
