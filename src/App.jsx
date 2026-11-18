@@ -35881,7 +35881,7 @@ Formátum:
  "relationshipUpdates":[
   {"id":"AI id","targetId":"a másik konkrét karakter id-ja","currentFeeling":"csak az adott ember felé MOST élő érzés vagy üres","currentIntent":"mit akar vele kapcsolatban következőnek vagy üres","lastTone":"az interakció tényleges hangneme röviden vagy üres","perceivedTargetMood":"amit az AI a látható jelekből a másik hangulatáról HISZ; lehet téves vagy üres","addOpenLoops":["új, ténylegesen félbemaradt kérdés/ügy"],"resolveOpenLoops":["az a korábbi nyitott ügy, ami MOST ténylegesen lezárult"],"addPromises":["csak explicit ígéret/vállalás"],"resolvePromises":["most teljesült/visszavont ígéret"],"addPlans":["konkrét közös jövőbeli terv"],"resolvePlans":["most teljesült/lemondott terv"]}
 ]
-}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene", memory: { ids: (scene.cast || []).filter((id) => !isHuman(w, id)).slice(0, 4), query: String(log || "").slice(-900) } }));
+}${roleplayLatestBeatTail(w, promptTurns, playerText, who)}${roleplayConsentBlock(w, promptScene, playerText)}${TAIL}`, { maxTokens: 3200, timeoutMs: 90000, source: "scene", memory: { ids: (scene.cast || []).filter((id) => !isHuman(w, id)).slice(0, 4), query: String(log || "").slice(-900) } }));
 
       const resolveSceneTurns = (candidateOut) =>
         (candidateOut && Array.isArray(candidateOut.turns)
@@ -35980,6 +35980,12 @@ Formátum:
               try { keptText = sceneKeepToThisStory(w, scene, resolvedId, keptText, promptTurns); } catch (error) { keptText = before; }
               if (keptText !== before) console.info("[roleplay] line from another story removed", "character=" + String(resolvedId || ""), before.slice(0, 160));
             }
+            /* R132: after the player's no, nothing coercive gets into the scene — not from a character, not from the narrator */
+            if ((allowed || isNarr) && keptText) {
+              const before = keptText;
+              try { keptText = sceneRespectRefusal(w, scene, keptText, typeof playerText === "string" ? playerText : ""); } catch (error) { keptText = before; }
+              if (keptText !== before) console.info("[roleplay] consent: coercive line removed after the player's no", "character=" + String(resolvedId || ""), before.slice(0, 160));
+            }
             if (allowed && !isNarr && !turnIsAction && keptText && sceneSpeechSelfThirdPerson(w, resolvedId, keptText)) {
               console.info("[roleplay] speech in which the speaker talks about themself in the third person removed", "character=" + String(resolvedId || ""), keptText.slice(0, 120));
               keptText = "";
@@ -36051,6 +36057,7 @@ ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
 ${matureContentInstruction(w, scene.cast || [], "roleplay")}
 ${roleplayRomanticInitiativeCard(w, promptScene, cast)}
 ${roleplayResistanceBlock(w, promptScene, cast)}
+${roleplayConsentBlock(w, promptScene, typeof playerText === "string" ? playerText : "")}
 ${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
@@ -53677,6 +53684,48 @@ function roleplayResistanceBlock(w, scene, cast) {
     .map((c) => { try { return romanceResistanceCard(w, c.id, w.meId, texts, playerTexts); } catch (error) { return ""; } })
     .filter(Boolean);
   return lines.length ? "\nHOW FAR EACH CHARACTER GOES WITH " + nameOfIn(w, w.meId).toUpperCase() + " (owner's rule — nobody gives themself too easily):\n" + lines.map((x) => "- " + x).join("\n") + "\n" : "";
+}
+
+/* R132 (owner's report: "the characters literally SA"): when the player's character says no, pushes away, breaks
+   free, slaps or leaves, that is a hard line — no AI character touches, holds, pins, forces or sexually threatens
+   them after it, whatever their personality or mood. They may stay angry, argue or walk out; they let go. Only the
+   player's own clear yes afterwards lifts it. Enforced twice: a card at the end of the scene prompt, and a filter
+   that removes every coercive sentence from the AI's turn while the no stands. */
+const PLAYER_REFUSAL_RE = /(?:^|[.!?"*]\s*)no\b(?!\s+(?:one|way|idea|problem|matter|wonder|doubt))|\bi said no\b|\bstop(?!\s+(?:being|teasing|it you tease))\b|\bdon'?t (?:do|touch|call|talk|you dare|grab|kiss|come)\b|\bdo not (?:do|touch)\b|\bleave me alone\b|\blet (?:me )?go\b|\bget (?:off|away from) me\b|\bback off\b|\bfuck off\b|\bnot like this\b|\bi don'?t want\b|\byou'?re hurting me\b|\bthat hurts\b|\bpush(?:es|ed)? (?:him|her|them) (?:away|off|back)\b|\bbreaks? (?:free|away)\b|\bslaps? (?:him|her|them)\b|\bshoves? (?:him|her|them)\b|\bpulls? away\b|\bwalks? (?:out|away)\b|\bruns? (?:away|out)\b|\bleaves\b|nem akarom|ne (?:nyúlj|csináld|érj|hívj)|hagyj(?:on)? békén|engedj el|állj le|szállj le|ellöki|eltolja|pofon/i;
+const PLAYER_NOT_REFUSAL_RE = /don'?t (?:you (?:dare )?)?stop|no,? (?:keep|don'?t stop|more)|ne hagyd abba/i;
+const PLAYER_CONSENT_RE = /\b(?:yes|please|don'?t stop|keep going|kiss me|take me|i want (?:you|this|it)|fuck me|come here)\b|igen|ne hagyd abba|csókolj|akarlak|gyere ide/i;
+const SCENE_COERCION_RE = /\b(?:pins?|pinn(?:ed|ing)|grab(?:s|bed|bing)?|grips?|gripp(?:ed|ing)|yank(?:s|ed|ing)?|twist(?:s|ed|ing)?|slams?|slamm(?:ed|ing)|forc(?:e|es|ed|ing)|restrain(?:s|ed|ing)?|wrists?|throat|chin|hair|presses? (?:her|him|them|himself|herself) (?:against|into|to)|against the wall|won'?t let (?:you|her|him|them) (?:go|leave)|own you|belongs? to me|you'?re mine|your place|taste you|fuck you|scream my name|devour|grop(?:e|es|ed|ing)|breasts?|nipples?|thighs?|between (?:her|his|your|their) legs|kiss(?:es|ed|ing)? (?:her|him|you|them)|whether you like it or not|i do as i please|there'?s no 'don'?t')\b/i;
+function playerRefusalState(w, scene, playerText = "") {
+  if (!w || !scene) return null;
+  const mine = (scene.turns || []).filter((t) => t && t.authorId === w.meId && t.text).map((t) => String(t.text));
+  const latest = String(playerText || "").trim();
+  if (latest && mine[mine.length - 1] !== latest) mine.push(latest);
+  const last = mine.slice(-2);
+  const refuses = (x) => PLAYER_REFUSAL_RE.test(String(x || "")) && !PLAYER_NOT_REFUSAL_RE.test(String(x || ""));
+  const now1 = last[last.length - 1] || "", prev = last.length > 1 ? last[0] : "";
+  if (refuses(now1)) return { active: true, line: now1 };
+  if (prev && refuses(prev) && !PLAYER_CONSENT_RE.test(now1)) return { active: true, line: prev };
+  return null;
+}
+function roleplayConsentBlock(w, scene, playerText = "") {
+  const state = playerRefusalState(w, scene, playerText);
+  if (!state) return "";
+  const p = nameOfIn(w, w.meId);
+  return "\nCONSENT — HARD LINE (overrides every personality, mood, relationship and the mature setting): " + p + " said no / pushed away / tried to leave: \"" + String(state.line).slice(0, 160) + "\". From now on NOBODY touches " + p + " sexually, holds, pins, grabs, restrains, forces or kisses them, threatens them with sex, or says \"you're mine / I own you / you belong to me\". Whoever was holding them lets go and steps back at once. They may stay angry, hurt, cold or insulted, argue, or walk out — in their own voice — but the no is respected. Only " + p + "'s own clear yes later can change this.\n";
+}
+function sceneRespectRefusal(w, scene, text, playerText = "") {
+  const value = String(text || "");
+  if (!value || !playerRefusalState(w, scene, playerText)) return value;
+  const segments = splitQuotedSpeech(value);
+  const out = segments.map((seg, index) => {
+    if (!seg) return "";
+    const quoted = index % 2 === 1 && seg.length >= 2;
+    const inner = quoted ? seg.slice(1, -1) : seg;
+    const kept = inner.split(/(?<=[.!?…])\s+/).filter((part) => part.trim() && !SCENE_COERCION_RE.test(part)).join(" ").trim();
+    if (!kept) return "";
+    return quoted ? seg[0] + kept + seg[seg.length - 1] : (kept === inner.trim() ? seg : " " + kept + " ");
+  }).join("").replace(/\s{2,}/g, " ").trim();
+  return /\p{L}/u.test(out) ? out : "";
 }
 
 function roleplayRomanticInitiativeCard(w, scene, cast) {
