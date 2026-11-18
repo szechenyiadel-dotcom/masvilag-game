@@ -8852,10 +8852,10 @@ function sceneKeepToThisStory(w, scene, speakerId, text, turns) {
   });
   const keepSentence = (part) => !(playerType && SCENE_PLAYER_TYPE_JEALOUSY_RE.test(part)) && !(!anchored && SCENE_VAGUE_REF_RE.test(part));
   /* quoted speech and narration are filtered separately, so a removed sentence never leaves a quote half open */
-  const segments = value.split(/("[^"]*"|“[^”]*”)/);
-  let out = segments.map((seg) => {
+  const segments = splitQuotedSpeech(value);
+  let out = segments.map((seg, index) => {
     if (!seg) return "";
-    const quoted = /^["“]/.test(seg) && /["”]$/.test(seg) && seg.length >= 2;
+    const quoted = index % 2 === 1 && seg.length >= 2;
     const inner = quoted ? seg.slice(1, -1) : seg;
     const kept = inner.split(/(?<=[.!?…])\s+/).filter((part) => part.trim() && keepSentence(part)).join(" ").trim();
     if (!kept) return "";
@@ -16247,6 +16247,37 @@ function stripHostileEndearments(w, actorId, targetId, value) {
 /* CLAUDE FIX R12: narration point of view. Outside quoted speech an AI
    character's action must never speak about the player as "I/me/my", and a
    sentence must not start with a bare verb ("Steps back…"). */
+/* R131: [narration, speech, narration, speech, …] — speech is "double", “curly”, 'single' or ‘curly single’ quoted.
+   A single quote opens speech only after a non-letter and before a non-space, and closes only after a non-space and
+   before a non-letter, so "don't" and "Tandy's" never count. */
+function splitQuotedSpeech(text) {
+  const value = String(text || "");
+  const out = [];
+  const isWordChar = (ch) => Boolean(ch) && /[\p{L}\p{N}]/u.test(ch);
+  let cursor = 0;
+  let i = 0;
+  while (i < value.length) {
+    const ch = value[i];
+    let close = -1;
+    if (ch === '"' || ch === "“") {
+      const endChars = ch === '"' ? ['"'] : ["”", '"'];
+      for (let j = i + 1; j < value.length; j++) if (endChars.includes(value[j])) { close = j; break; }
+    } else if ((ch === "'" || ch === "‘") && !isWordChar(value[i - 1]) && value[i + 1] && !/\s/.test(value[i + 1])) {
+      for (let j = i + 1; j < value.length; j++) {
+        const c = value[j];
+        if ((c === "'" || c === "’") && !/\s/.test(value[j - 1]) && !isWordChar(value[j + 1])) { close = j; break; }
+      }
+    }
+    if (close > i) {
+      out.push(value.slice(cursor, i), value.slice(i, close + 1));
+      cursor = close + 1;
+      i = close + 1;
+    } else i++;
+  }
+  out.push(value.slice(cursor));
+  return out;
+}
+
 function repairRoleplayNarrationPov(w, actorId, value) {
   const text = String(value || "");
   if (!text || worldLanguage(w, w && w.meId) !== "en") return text;
@@ -16257,8 +16288,10 @@ function repairRoleplayNarrationPov(w, actorId, value) {
   const actor = charById(w, actorId);
   const actorFirst = String(actor && actor.name || "").split(/\s+/)[0];
   const NOT_VERBS = new Set(["This", "His", "Hers", "Its", "Is", "Was", "Yes", "As", "Thus", "Has", "Does", "Always", "Perhaps", "Sometimes", "Besides", "Afterwards", "Towards", "Unless", "Less", "Princess", "Class", "Glass", "Kiss", "Miss", "Boss", "Chess", "Dress", "Us", "Plus", "Less", "Nevertheless", "Regardless", "Seconds", "Minutes", "Hours", "Lips", "Eyes", "Hands", "Words", "Thoughts"]);
-  /* split into quoted speech and narration; repair only the narration */
-  const parts = text.split(/(\"[^\"]*\"|“[^”]*”)/);
+  /* split into quoted speech and narration; repair only the narration.
+     R131: speech in 'single quotes' counts too — it was "repaired" as narration, so Brent's own
+     'You used me ... throw me away' became 'You used her ... throw her away'. */
+  const parts = splitQuotedSpeech(text);
   const fixed = parts.map((part, index) => {
     if (index % 2 === 1) return part; /* spoken words stay untouched */
     let out = part
