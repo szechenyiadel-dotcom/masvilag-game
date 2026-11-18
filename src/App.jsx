@@ -9281,6 +9281,10 @@ async function callClaude(system, prompt, maxTokens = 1200, requestMeta = {}) {
           retryAfterMs = Math.max(0, retryDate - Date.now());
         }
       }
+      /* R130: a provider resting for half an hour (out of credit) froze EVERY AI call in the game for that long
+         ("remaining cooldown is 1873s"), even with another provider ready. The server keeps track of each provider's
+         rest itself; here a wait never exceeds a minute and a half. */
+      retryAfterMs = Math.min(retryAfterMs, 90000);
 
       /*
        * Exponenciálisabb backoff kevesebb újraütéssel. A rövid provider

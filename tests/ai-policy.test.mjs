@@ -187,6 +187,8 @@ test("Groq takes a utility request only when it fits whole, never when it would 
 
 test("A request may wait longer for Groq in the background than when a player is waiting", () => {
   assert.equal(groqPaceMaxWaitMs({ foreground: true }), 8000);
+  assert.equal(groqPaceMaxWaitMs({ foreground: true, source: "dm" }), 25000, "R130: a waiting DM reply waits for Groq's next minute");
+  assert.equal(groqPaceMaxWaitMs({ foreground: true, source: "scene" }), 25000);
   assert.equal(groqPaceMaxWaitMs({ source: "meaning-analysis" }), 20000);
 });
 
