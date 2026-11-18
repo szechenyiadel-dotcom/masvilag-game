@@ -9745,6 +9745,50 @@ function normalizeSceneAnswerShape(out) {
     const rows = rowsOf(arr);
     if (rows.length) return { ...out, turns: rows };
   }
+  /* R125: last resort — the role-play model also answers {"roleplay":"…"}, {"dialog":"…","actions":"…"},
+     {"scene":{"id":…,"action":"…","dialogue":["…"]}}, {"actions":["…"],"dialogue":["…"]}, {"turn":{"character_id":…}}.
+     Every action / spoken line in it is kept; a line with no speaker goes to the scene's only AI character
+     (id "__solo__", resolved by the scene). Mood, memory and relationship fields are never read as lines. */
+  if (!Array.isArray(out.turns) || !out.turns.length) {
+    const ACTION_KEYS = /^(?:action|actions|narration|description|physical)$/i;
+    const SPEECH_KEYS = /^(?:dialogue|dialog|dialogues|speech|says|line|lines|reply|response|roleplay|message|text|content)$/i;
+    const NEST_KEYS = /^(?:scene|turn|roleplay|response|reply|output|result|character|reactions)$/i;
+    const found = [];
+    const idOf = (node, fallback) => {
+      for (const k of ["id", "character_id", "characterId", "actor", "speaker", "author", "character", "name"]) {
+        const v = node && node[k];
+        if ((typeof v === "string" || typeof v === "number") && String(v).trim()) return v;
+      }
+      return fallback;
+    };
+    const visit = (node, owner, depth) => {
+      if (!node || typeof node !== "object" || depth > 3) return;
+      const id = idOf(node, owner);
+      for (const [k, v] of Object.entries(node)) {
+        const isAction = ACTION_KEYS.test(k), isSpeech = SPEECH_KEYS.test(k);
+        if (typeof v === "string") {
+          if ((isAction || isSpeech) && v.trim()) found.push({ id: id || "__solo__", kind: isAction ? "action" : "speech", text: v.trim() });
+        } else if (Array.isArray(v)) {
+          if (/^reactions?$/i.test(k)) {
+            v.forEach((x) => { if (x && typeof x === "object" && !/emotion|internal|thought|feeling|mood/i.test(String(x.type || x.kind || "")) && typeof x.text === "string" && x.text.trim()) found.push({ id: idOf(x, id) || "__solo__", kind: "action", text: x.text.trim() }); });
+          } else if (isAction || isSpeech) {
+            v.forEach((x) => {
+              if (typeof x === "string" && x.trim()) found.push({ id: id || "__solo__", kind: isAction ? "action" : "speech", text: x.trim() });
+              else if (x && typeof x === "object") { const r = rowOf({ ...x, id: idOf(x, id) || "__solo__" }); if (r) found.push({ ...r, kind: isAction ? "action" : (r.kind === "action" ? "action" : "speech") }); }
+            });
+          }
+        } else if (v && typeof v === "object" && NEST_KEYS.test(k)) visit(v, id, depth + 1);
+      }
+    };
+    visit(out, "", 0);
+    if (found.length) {
+      const flat = (v) => String(v || "").toLowerCase().replace(/["“”'‘’*]/g, "").replace(/\s+/g, " ").trim();
+      const acts = found.filter((r) => r.kind === "action");
+      const rows = found.filter((r, i) => r.kind === "action" || !acts.some((a) => String(a.id) === String(r.id) && flat(a.text).includes(flat(r.text))))
+        .filter((r, i, arr) => arr.findIndex((x) => flat(x.text) === flat(r.text)) === i);
+      if (rows.length) return { ...out, turns: rows };
+    }
+  }
   if (!Array.isArray(out.turns)) { const single = rowOf(out); if (single && !out.summary) return { ...out, turns: [single] }; }
   return out;
 }
@@ -35778,9 +35822,11 @@ Formátum:
           .map((t) => {
             const raw = t && (t.id !== undefined ? t.id : t.name);
             const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
+            /* R125: a line the model gave without a speaker belongs to the scene's only AI character */
+            const soloIds = (scene.cast || []).filter((id) => charById(w, id) && !isHuman(w, id));
             const resolvedId = isNarr
               ? "narrator"
-              : (findChar(w, raw) || findChar(w, t && t.name));
+              : (findChar(w, raw) || findChar(w, t && t.name) || (String(raw) === "__solo__" && soloIds.length === 1 ? soloIds[0] : ""));
             const allowed = isNarr || (resolvedId && !isHuman(w, resolvedId));
 
             const rawText = t && t.text ? String(t.text) : "";
@@ -36084,7 +36130,8 @@ JSON ONLY:
         const fallbackRows = (out && Array.isArray(out.turns) ? out.turns : []).map((t) => {
           const raw = t && (t.id !== undefined ? t.id : t.name);
           const isNarr = String(raw || "").trim().toLowerCase() === "narrator";
-          const id = isNarr ? "narrator" : (findChar(w, raw) || findChar(w, t && t.name));
+          const soloIds = (scene.cast || []).filter((x) => charById(w, x) && !isHuman(w, x));
+          const id = isNarr ? "narrator" : (findChar(w, raw) || findChar(w, t && t.name) || (String(raw) === "__solo__" && soloIds.length === 1 ? soloIds[0] : ""));
           if (!id || (!isNarr && isHuman(w, id))) return null;
           const text = stripRoleplayEmoji(trimToWholeSentences(normalizeGeneratedSocialText(String(t && t.text || "")), 2600));
           if (!text || lastTexts.has(text.trim().toLowerCase())) return null;

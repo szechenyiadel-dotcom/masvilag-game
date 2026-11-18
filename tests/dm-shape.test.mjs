@@ -105,6 +105,22 @@ test("R119: scene lines under actions / sceneUpdates / dialogues (or named by ac
   assert.deepEqual(n({ turns: [{ id: "max", text: "Hi." }], actions: [{ id: "x", text: "ignored" }] }).turns.map((t) => t.id), ["max"], "real turns win");
 });
 
+test("R125: any shape the role-play model answers in keeps its lines", () => {
+  const ctx = vm.createContext({ String, Array, Object });
+  vm.runInContext(pick(["normalizeSceneAnswerShape"]), ctx);
+  const n = (o) => JSON.parse(JSON.stringify(ctx.normalizeSceneAnswerShape(o)));
+  const t = (o) => n(o).turns.map((x) => [x.id, x.kind, x.text]);
+  assert.deepEqual(t({ language: "en", roleplay: "You do? *he whispers* Every single day." }), [["__solo__", "speech", "You do? *he whispers* Every single day."]]);
+  assert.deepEqual(t({ dialog: "I need you.", actions: "He shifts closer.", emotions: "He is losing control." }), [["__solo__", "speech", "I need you."], ["__solo__", "action", "He shifts closer."]]);
+  assert.deepEqual(t({ scene: { id: "max", action: "He kisses her neck.", dialogue: ["Tell me.", "I need to hear it."], reactions: [{ id: "max", type: "Physical", text: "He grinds against her." }, { id: "max", type: "Emotional", text: "He never felt this." }] }, changes: [] }),
+    [["max", "action", "He kisses her neck."], ["max", "speech", "Tell me."], ["max", "speech", "I need to hear it."], ["max", "action", "He grinds against her."]]);
+  assert.deepEqual(t({ actions: ["He leans in."], dialogue: ["\"Fuck...\" he breathes."], selfUpdates: [{ id: "max", mood: "x" }] }), [["__solo__", "action", "He leans in."], ["__solo__", "speech", "\"Fuck...\" he breathes."]]);
+  assert.deepEqual(t({ id: "max", action: "He groans.", dialogue: "I won't. I can't anymore." }), [["max", "action", "He groans."], ["max", "speech", "I won't. I can't anymore."]]);
+  const summary = { summary: "done", memories: [], selfUpdates: [{ id: "max", mood: "calm" }] };
+  assert.deepEqual(n(summary), summary, "mood / memory fields are never lines");
+  assert.match(source, /String\(raw\) === "__solo__" && soloIds\.length === 1 \? soloIds\[0\]/);
+});
+
 test("R98: a 'you did not follow back' DM never says the player followed the character", () => {
   const ctx = vm.createContext({ String });
   vm.runInContext(pick(["fixFollowDirection"]), ctx);
