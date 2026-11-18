@@ -15,7 +15,7 @@ const pick = (names) => ast.program.body
 function app(lang = "en") {
   const context = vm.createContext({ String, Number, Array, Set, Object, RegExp, asLang: (x) => (x === "hu" ? "hu" : "en") });
   vm.runInContext("let CURRENT_LANG = " + JSON.stringify(lang) + ";\n" + pick([
-    "HU_FUNCTION_WORDS", "EN_FUNCTION_WORDS", "stringLooksHungarian", "generatedStringsLookHungarian", "generatedVisibleStrings",
+    "HU_FUNCTION_WORDS", "HU_PLAIN_WORDS", "EN_FUNCTION_WORDS", "stringLooksHungarian", "generatedStringsLookHungarian", "generatedVisibleStrings",
     "generatedTextLooksHungarian", "validateGeneratedLanguage", "activeLanguageHalf", "HU_STOPWORDS", "looksHungarianText",
   ]), context);
   return context;
@@ -29,6 +29,12 @@ test("A short Hungarian line inside an English answer is caught; English with na
   for (const text of ["See you at the mill, Ádám Kovács!", "Zsófi and Ádám are coming", "love this café", "@szécsényi.adél you up?", "José is the best", "ok", "Björk on repeat"]) {
     assert.equal(c.stringLooksHungarian(text), false, text);
   }
+});
+
+test("R122: Hungarian with no accents is caught too; English is not", () => {
+  const c = app();
+  for (const text of ["Ha akarom, akarok.", "Akarom.", "Persze, majd meglatjuk", "szia, mit csinalsz?", "Tudom. Komolyan."]) assert.equal(c.stringLooksHungarian(text), true, text);
+  for (const text of ["Ha! Nice try.", "See you never.", "Most people would run.", "Hold up, babe", "Mikor is here", "I'm not ending anything, baby."]) assert.equal(c.stringLooksHungarian(text), false, text);
 });
 
 test("The first English answer with one Hungarian comment is sent back once; after the strict retry it is accepted", () => {
