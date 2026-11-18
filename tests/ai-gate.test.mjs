@@ -334,11 +334,20 @@ function groqPath({ env = {}, respond, pacer = createGroqPacer() } = {}) {
       return respond({ url, options });
     },
   });
-  vm.runInContext(pick(["AI_UPSTREAM_TIMEOUT_MS", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2", "PAID_MAX_INPUT_CHARS", "AI_USAGE", "AI_GATE", "providerCooldownMs", "groqSiblingReady", "groqRequestSize", "extractText", "aiRequestText", "aiRequestChars", "preservePromptEdges", "buildCompatibleChatPayload", "normalizeOpenAIResponse", "upstreamTimeoutFor", "proxyCompatibleMessage"]), context);
+  vm.runInContext(pick(["AI_UPSTREAM_TIMEOUT_MS", "GROQ_API_KEY_2", "GROQ_MODEL", "GROQ_MODEL_2", "PAID_MAX_INPUT_CHARS", "AI_USAGE", "AI_GATE", "providerCooldownMs", "groqSiblingReady", "groqRequestSize", "extractText", "aiRequestText", "aiRequestChars", "preservePromptEdges", "buildCompatibleChatPayload", "normalizeOpenAIResponse", "upstreamTimeoutFor", "proxyCompatibleMessage", "GROQ_RESERVED_FOR_PLAYER_UNTIL"]), context);
   return { context, sent, pacer, usage: vm.runInContext("AI_USAGE", context) };
 }
 const chatBody = (extra = {}) => ({ source: "dm", system: "S".repeat(9000), messages: [{ role: "user", content: "U".repeat(30000) }], max_tokens: 1024, ...extra });
 const textLength = (payload) => payload.messages.reduce((n, m) => n + m.content.length, 0);
+
+test("R130: once a waiting DM reply reached Groq, background work keeps off Groq for a while", async () => {
+  const { context } = groqPath();
+  await context.proxyCompatibleMessage("groq", "key", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1/chat/completions", { ...chatBody(), foreground: true });
+  const bg = await context.proxyCompatibleMessage("groq", "key", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1/chat/completions", chatBody({ source: "comments" }));
+  assert.equal(bg.ok, false);
+  assert.equal(bg.status, 429);
+  assert.match(String(bg.payload.error.message), /kept for the player/);
+});
 
 test("Groq: a long chat request is shortened to its per-minute budget before it is sent", async () => {
   const { context, sent } = groqPath();

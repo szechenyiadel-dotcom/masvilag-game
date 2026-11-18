@@ -5044,6 +5044,8 @@ async function proxyAnthropicMessage(body) {
 
 /* MÁSVILÁG AI 403 FAILOVER + GROUP CHAT DEDUPE v4 */
 const AI_GROQ_MAX_INPUT_CHARS = 300000;
+/* R130: until when Groq is kept for a player who waits on a DM reply / scene turn */
+let GROQ_RESERVED_FOR_PLAYER_UNTIL = 0;
 const AI_GROUP_CHAT_SYSTEM_CAP = 18000;
 const AI_GROUP_CHAT_PROMPT_CAP = 36000;
 const AI_GROUP_CHAT_DEDUPE_MS = 15000;
@@ -5169,6 +5171,14 @@ async function proxyCompatibleMessage(provider, apiKey, model, endpoint, body) {
   let providerBody = body;
   let lease = null;
   if (provider === "groq" || provider === "groq2") {
+    /* R130: a DM reply or scene turn the player waits on reached Groq, so the paid providers are out — for the next
+       three minutes Groq's small per-minute budget is kept for the player; background work waits. */
+    const waitingKind = String(body?.source || "").toLowerCase();
+    if (isForegroundRequest(body) && (waitingKind === "dm" || waitingKind === "scene")) GROQ_RESERVED_FOR_PLAYER_UNTIL = Date.now() + 180000;
+    else if (!isForegroundRequest(body) && Date.now() < GROQ_RESERVED_FOR_PLAYER_UNTIL) {
+      console.info("[ai-provider] groq-reserved", `provider=${provider}`, `source=${String(body?.source || "unknown")}`);
+      return { ok: false, status: 429, paced: true, retryAfter: "60", payload: { error: { message: `${provider} is kept for the player's waiting DM / scene right now` } }, provider, model };
+    }
     const size = groqRequestSize(body);
     const plan = planGroqRequest(size);
     if (!plan.fits) {

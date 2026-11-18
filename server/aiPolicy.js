@@ -233,7 +233,11 @@ export function groqCarriesWhole({ maxTokens, systemChars, messageChars }) {
 
 /* How long a request may wait for its turn on a Groq key before the next provider takes it. */
 export function groqPaceMaxWaitMs(body) {
-  return isForegroundRequest(body) ? 8000 : 20000;
+  /* R130: when Groq is the last net, a DM reply or scene turn the player waits on would rather wait for the next
+     minute's budget than fail */
+  const kind = String(body && body.source || "").toLowerCase();
+  if (isForegroundRequest(body)) return kind === "dm" || kind === "scene" ? 25000 : 8000;
+  return 20000;
 }
 
 export const GROQ_WINDOW_MS = 60 * 1000;
