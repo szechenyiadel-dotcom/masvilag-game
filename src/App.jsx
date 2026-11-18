@@ -19764,7 +19764,7 @@ ${roleplayBoost}
         : "No explicit pornographic sexual detail. When intimacy would become graphically sexual, keep it non-graphic or transition naturally with a fade-to-black / implied continuation."
     }
 - If consenting known adults have already entered an intimate situation, the scene may keep going through character-specific dialogue, kissing, closeness, emotion, atmosphere, movement to a private setting and time progression; it does not have to stop or cut away.
-- If the player's latest actual RP turn clearly initiates or reciprocates adult intimacy, understand that meaning and respond to it in-character instead of dodging, moralizing, resetting to small talk or pretending the advance did not happen. Never invent the player's next response.
+- If the player's latest actual RP turn clearly initiates or reciprocates adult intimacy, understand that meaning and respond to it in-character instead of dodging, moralizing, resetting to small talk or pretending the advance did not happen. Never invent the player's next response. Responding in character can very well mean refusing, stopping, slowing down or pulling back — the RESISTANCE lines decide how far each character goes; nobody gives themself too easily.
 - Never sexualize a minor. ${
       allAdults
         ? "Every currently involved participant has a known age of 18+, so adult romantic, suggestive and sexual content may be used."
@@ -35725,6 +35725,7 @@ ${roleplayRomanticInitiativeCard(
   promptScene,
   cast
 )}
+${roleplayResistanceBlock(w, promptScene, cast)}
 
 ROLEPLAY FOLYTATÁS — FONTOS:
 
@@ -35973,6 +35974,7 @@ ${repetitionGuard(w, cast.map((c) => c.id), "jelenetfolytatás")}
 
 ${matureContentInstruction(w, scene.cast || [], "roleplay")}
 ${roleplayRomanticInitiativeCard(w, promptScene, cast)}
+${roleplayResistanceBlock(w, promptScene, cast)}
 ${participationCard}
 
 SZIGORÚ ÚJRAGENERÁLÁSI SZABÁLYOK:
@@ -38867,6 +38869,11 @@ ${relationshipBehaviorCard(
   c.id,
   requestWorld.meId
 )}
+${(() => { try {
+  /* R126: how far this character goes with the player in a DM too */
+  const msgs = ((requestWorld.chats && requestWorld.chats[ck]) || []).slice(-16);
+  return romanceResistanceCard(requestWorld, c.id, requestWorld.meId, [...msgs.map((m) => m && m.text), t], [...msgs.filter((m) => m && m.from !== "them").map((m) => m.text), t]);
+} catch (error) { return ""; } })()}
 
 Amire emlékszel:
 ${selfMemoryForPrompt(
@@ -53520,6 +53527,80 @@ function contextualRoleplayCast(w, host, generatedCast, descriptor, options = {}
     if (row.explicit || row.score >= threshold) selected.push(row.id);
   });
   return [...new Set(selected)].filter(Boolean).slice(0, maxCast);
+}
+
+/* R126 (owner's rule): nobody gives themself too easily. Every AI character has a RESISTANCE level toward the
+   player, from their sheet and the relationship: no crush, a partner elsewhere, an authority gap (sensei / teacher /
+   boss), a principled or guarded nature, a cold or hostile relationship all raise it; a player type, a flirty or
+   impulsive nature and an existing relationship lower it. The level says how many advances it takes before the
+   character gives ground at all, and intimacy moves one step at a time (flirting → closeness/touch → kiss →
+   making out → more), never skipping one. A drunk partner is a hard line for anyone decent. */
+const RESIST_PRINCIPLED_RE = /principled|moral\b|morals|honou?rable|integrity|loyal|responsib|disciplin|self[- ]control|by the book|protective|religious|devout|old[- ]fashioned|gentleman|righteous|elvhű|erkölcs|becsület|hűséges|felelős|fegyelm/i;
+const RESIST_GUARDED_RE = /guarded|trust issues|reserved|shy\b|introvert|aloof|cold\b|distant|closed[- ]off|emotionally unavailable|walls? up|slow to trust|cautious|awkward|stoic|bizalmatlan|zárkózott|félénk|visszafogott|hideg|óvatos/i;
+const RESIST_EASY_RE = /impulsive|reckless|hedonist|wild\b|promiscuous|thrill[- ]seek|sexually (?:open|confident|adventurous)|horny|insatiable|impulzív|vakmerő|kicsapongó/i;
+const RESIST_AUTHORITY_RE = /sensei|teacher|coach|mentor|instructor|boss|professor|guardian|student|pupil|apprentice|tanítvány|tanár|edző|főnök/i;
+const RESIST_TOGETHER_RE = /dating|partner|girlfriend|boyfriend|lover|married|wife|husband|fiancé|together|együtt járnak|barátnő|barátja|szerelm/i;
+const RESIST_INTOX_RE = /\b(?:drunk|wasted|intoxicated|tipsy|hammered|stoned|high as)\b|részeg|ittas|beállt|bebaszott/i;
+const RESIST_ADVANCE_RE = /\b(?:kiss(?:ed|es|ing)?|touch(?:es|ed|ing)?|undress|strip(?:s|ped)?|naked|bed\b|want you|need you|take me|fuck me|on (?:top|me)|unbutton|unzip|shirt off|pulls? (?:him|her|you) (?:closer|in)|presses? (?:herself|himself|her body|his body)|grinds?|moan)|csók|érint|vetkőz|meztelen|akarlak|ágy/i;
+function romanceResistanceLevel(w, actorId, targetId) {
+  const actor = charById(w, actorId), target = charById(w, targetId);
+  if (!actor || !target || isHuman(w, actorId)) return null;
+  let flirt = null;
+  try { flirt = flirtPermissionState(w, actorId, targetId); } catch (error) { flirt = null; }
+  const rel = getRel(w, actorId, targetId) || EMPTY_REL;
+  const score = Number(rel.score) || 0;
+  const bond = [rel.bond, rel.type, rel.role, rel.label, ...((Array.isArray(rel.layers)) ? rel.layers : [])].filter(Boolean).join(" ");
+  const nature = [actor.personality, actor.traits, actor.extra, actor.brief, actor.speech].filter(Boolean).join(" ");
+  const reasons = [];
+  if (!flirt || !flirt.allowed || flirt.family) return { level: "closed", reasons: [flirt && flirt.family ? "family" : "no romantic interest that their canon allows"], actor, target };
+  let points = 0;
+  const together = RESIST_TOGETHER_RE.test(bond) && !/fake|kamu|ál/i.test(bond);
+  if (together) { points -= 4; reasons.push("already together"); }
+  if (!flirt.crushActive) { points += 3; reasons.push("no real feelings for them yet"); }
+  if (flirt.committedElsewhere) { points += 3; reasons.push("committed to someone else"); }
+  let authority = RESIST_AUTHORITY_RE.test(bond);
+  try { if (!authority && characterIsSenseiRank(w, actor) && speakerBelongsUnder(w, targetId, actor)) authority = true; } catch (error) { /* keep */ }
+  if (authority && !together) { points += 3; reasons.push("power gap (sensei / teacher / boss)"); }
+  if (RESIST_PRINCIPLED_RE.test(nature)) { points += 2; reasons.push("principled"); }
+  if (RESIST_GUARDED_RE.test(nature)) { points += 2; reasons.push("guarded"); }
+  if (score < 0) { points += 3; reasons.push("they don't like them"); } else if (score < 25 && !together) { points += 1; reasons.push("not close yet"); }
+  if (flirt.secretCrush) { points += 1; reasons.push("hides the crush"); }
+  let player = false;
+  try { player = isPlayerType(w, actor); } catch (error) { player = false; }
+  if (player) { points -= 2; reasons.push("player type: easy about casual, never about feelings"); }
+  else if (flirt.naturallyFlirty) points -= 1;
+  if (RESIST_EASY_RE.test(nature)) points -= 1;
+  const level = points >= 6 ? "very high" : points >= 4 ? "high" : points >= 2 ? "medium" : "low";
+  return { level, reasons, actor, target, together };
+}
+function romanceResistanceCard(w, actorId, targetId, recentTexts = [], playerTexts = []) {
+  const r = romanceResistanceLevel(w, actorId, targetId);
+  if (!r) return "";
+  const a = r.actor.name, t = r.target.name;
+  const advances = (playerTexts || []).filter((x) => RESIST_ADVANCE_RE.test(String(x || ""))).length;
+  const drunk = (recentTexts || []).slice(-12).some((x) => RESIST_INTOX_RE.test(String(x || "")));
+  const pace = "Intimacy moves ONE step at a time — flirting → closeness/touch → kiss → making out → anything more — never skipping a step and never more than one step in a reply.";
+  const byLevel = {
+    "closed": a + " is NOT available to " + t + " romantically: no reciprocation at all — turns it down, deflects or shuts it down in their own voice.",
+    "very high": a + " does NOT give in to " + t + " in this scene/chat: pulls back, stops it, redirects or leaves, in their own voice. At most one moment that almost happens — then they stop themself. Only many separate meaningful moments over time can change this.",
+    "high": a + " holds back from " + t + ": the first several advances (at least 4) are refused, stopped or deflected. After that they may give ground, but only one step, then hesitate again. " + pace,
+    "medium": a + " makes " + t + " work for it: the first couple of advances (at least 2) are teased off or slowed down; then they may reciprocate. " + pace,
+    "low": a + " may reciprocate " + t + "'s advances, but still: " + pace + (r.together ? "" : " Sex only after the scene has truly built up through every earlier step."),
+  };
+  return "RESISTANCE — " + a + " toward " + t + ": " + r.level.toUpperCase() + (r.reasons.length ? " (" + r.reasons.join("; ") + ")" : "") + ". " +
+    t + "'s advances so far: " + advances + ". " + byLevel[r.level] +
+    (drunk ? " " + t + " or " + a + " is DRUNK right now: " + a + " does not go past a kiss" + (r.level === "low" ? "" : " — and stops even that") + ", whatever is said. Being drunk is never consent." : "") +
+    " Responding in character often MEANS refusing, slowing down or pulling back.";
+}
+function roleplayResistanceBlock(w, scene, cast) {
+  if (!w || !scene || !w.meId) return "";
+  const turns = (scene.turns || []).slice(-24);
+  const texts = turns.map((x) => String(x && x.text || ""));
+  const playerTexts = turns.filter((x) => x && (x.authorId === w.meId || (x.authorId && isHuman(w, x.authorId)))).map((x) => String(x.text || ""));
+  const lines = (cast || []).filter((c) => c && !isHuman(w, c.id)).slice(0, 4)
+    .map((c) => { try { return romanceResistanceCard(w, c.id, w.meId, texts, playerTexts); } catch (error) { return ""; } })
+    .filter(Boolean);
+  return lines.length ? "\nHOW FAR EACH CHARACTER GOES WITH " + nameOfIn(w, w.meId).toUpperCase() + " (owner's rule — nobody gives themself too easily):\n" + lines.map((x) => "- " + x).join("\n") + "\n" : "";
 }
 
 function roleplayRomanticInitiativeCard(w, scene, cast) {
