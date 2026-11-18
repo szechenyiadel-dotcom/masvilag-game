@@ -9342,6 +9342,9 @@ function generatedTextLooksHungarian(result) {
    "dühös rá") used to pass as English because the whole answer was counted together.
    Each visible string is now looked at on its own; capitalised words (names) do not count. */
 const HU_FUNCTION_WORDS = new Set("és hogy nem egy az ez már még csak mint vagy aki ami nagyon itt ott lesz volt sem mert én ő ők nincs igen hol mit miért mikor velem veled neki nekem neked rá ide oda szia jó rossz kell lehet tudom tudod nálam nálad azt ezt vagyok vagyunk lenne majd persze akkor úgy így megint is de meg fel le ki be lett van vannak voltak".split(" "));
+/* R122: everyday Hungarian with no accent at all ("Ha akarom, akarok.") passed as English. These words never occur in
+   English; written capitalised at the start of a line they count too. */
+const HU_PLAIN_WORDS = new Set("akarom akarok akarod akarja akarsz akarunk akartam akartad tudom tudok tudod tudja tudsz tudunk szeretlek szeretem szeretnem mondd mondtam mondta mondjuk gyere menj megyek menjunk hagyj hagyd valami semmi valaki senki mindig soha kicsit hogyan mert vele veled velem neki nekem neked ezt azt itt ott akkor majd megint igen nem sem csak vagy vagyok vagyunk vagytok leszek lesz voltam volt legyen kell kellene lehet lehetne persze ugye komolyan basszus szoval amugy ilyen olyan ennyi annyi hova honnan mikor szia sziasztok nincs nincsen latod hallod figyelj szerinted csinalod csinalsz csinalok varj varok kerlek koszi".split(" "));
 const EN_FUNCTION_WORDS = new Set("the and you with from that this is are was were your their what not but for to of in on it i me my we he she they be have has do does did can will just so".split(" "));
 function stringLooksHungarian(value) {
   const text = String(value || "").replace(/[@#][\p{L}\p{N}_.]+/gu, " ");
@@ -9350,8 +9353,11 @@ function stringLooksHungarian(value) {
   const lower = words.filter((x) => x[0] === x[0].toLowerCase());
   if (lower.some((x) => /[őű]/.test(x))) return true;
   const accented = lower.filter((x) => /[áéíóöúü]/.test(x)).length;
-  const hu = lower.filter((x) => HU_FUNCTION_WORDS.has(x)).length;
+  const plain = words.filter((x) => HU_PLAIN_WORDS.has(x.toLowerCase()) && (x[0] === x[0].toLowerCase() || x.length >= 4)).length;
+  const hu = lower.filter((x) => HU_FUNCTION_WORDS.has(x)).length + words.filter((x) => x[0] !== x[0].toLowerCase() && x.length >= 4 && HU_PLAIN_WORDS.has(x.toLowerCase())).length + lower.filter((x) => HU_PLAIN_WORDS.has(x) && !HU_FUNCTION_WORDS.has(x)).length;
   const en = lower.filter((x) => EN_FUNCTION_WORDS.has(x)).length;
+  /* R122: a short line made of Hungarian words only ("Akarom.", "Ha akarom, akarok.") */
+  if (plain >= 1 && en === 0 && words.length <= 4 && plain * 2 >= words.length) return true;
   if (accented >= 2 && accented >= en) return true;
   if (accented >= 1 && hu >= 1 && en === 0) return true;
   /* á í ó ö ú ü in a lowercase word (é alone is too common in English loanwords: café, résumé) */
