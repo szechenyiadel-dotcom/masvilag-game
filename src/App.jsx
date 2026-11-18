@@ -8835,6 +8835,37 @@ function sceneSpeechSelfThirdPerson(w, speakerId, text) {
   });
 }
 
+/* R128 */
+const SCENE_PLAYER_TYPE_JEALOUSY_RE = /\byou(?:'re| are) (?:mine|my)\b|\bmine\b[.!]|belongs? to me|who you belong to|any other (?:man|guy|girl|woman|dude)|(?:won'?t|not gonna|never) (?:let|tolerate|allow) (?:anyone|any other|another|other (?:men|guys|girls))|nobody (?:else )?(?:touches|gets to touch|lays a (?:hand|finger))/i;
+const SCENE_VAGUE_REF_RE = /\b(?:after what (?:she|he|they) (?:did|done|said|pulled)|what (?:she|he) did to|that (?:piece of shit|bastard|bitch|asshole|prick|motherfucker|son of a bitch|fucker|snake)|(?:go|going|run|running|went) (?:after|back to) (?:her|him)|let you (?:go|run) (?:to|after) (?:her|him))\b/i;
+function sceneKeepToThisStory(w, scene, speakerId, text, turns) {
+  const value = String(text || "");
+  if (!w || !scene || !speakerId || !value.trim()) return value;
+  const speaker = charById(w, speakerId);
+  let playerType = false;
+  try { playerType = Boolean(speaker && isPlayerType(w, speaker)); } catch (error) { playerType = false; }
+  const recent = [scene.title, scene.premise, scene.setting, scene.goal, ...((Array.isArray(turns) ? turns : (scene.turns || [])).slice(-10).map((t) => t && t.text))].filter(Boolean).join(" ");
+  const anchored = (w.chars || []).some((c) => {
+    if (!c || c.id === speakerId || c.id === w.meId) return false;
+    const names = [c.name, String(c.name || "").split(/\s+/)[0], nicknameInfo(c.nick).name].filter((n) => n && n.length >= 3);
+    return names.some((n) => new RegExp("(^|[^\\p{L}])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|[^\\p{L}])", "iu").test(recent));
+  });
+  const keepSentence = (part) => !(playerType && SCENE_PLAYER_TYPE_JEALOUSY_RE.test(part)) && !(!anchored && SCENE_VAGUE_REF_RE.test(part));
+  /* quoted speech and narration are filtered separately, so a removed sentence never leaves a quote half open */
+  const segments = value.split(/("[^"]*"|“[^”]*”)/);
+  let out = segments.map((seg) => {
+    if (!seg) return "";
+    const quoted = /^["“]/.test(seg) && /["”]$/.test(seg) && seg.length >= 2;
+    const inner = quoted ? seg.slice(1, -1) : seg;
+    const kept = inner.split(/(?<=[.!?…])\s+/).filter((part) => part.trim() && keepSentence(part)).join(" ").trim();
+    if (!kept) return "";
+    if (quoted) return ((kept.match(/\p{L}/gu) || []).length <= 4 ? "" : seg[0] + kept + seg[seg.length - 1]);
+    return kept === inner.trim() ? seg : " " + kept + " ";
+  }).join("").replace(/\s{2,}/g, " ").trim();
+  out = stripInventedSharedPast(w, speakerId, out, [w.meId, ...((scene.cast || []).filter((id) => id !== speakerId))]);
+  return /\p{L}/u.test(out) ? out : "";
+}
+
 function roleplayLatestBeatTail(w, turns, playerText, who) {
   const en = worldLanguage(w, w && w.meId) === "en";
   const lookup = typeof who === "function" ? who : (id) => charById(w, id);
@@ -35903,6 +35934,14 @@ Formátum:
             if (unsupportedPhysicalContinuation) {
               keptText = String(roleplayText).split(/(?<=[.!?…])\s+/).filter((part) => !roleplayHasUnsupportedPhysicalContinuation(resolvedId, part, promptTurns)).join(" ").trim();
               console.info("[roleplay] unsupported hold removed", "character=" + String(resolvedId || ""), "kept=" + keptText.length);
+            }
+            /* R128: a scene line that only makes sense in another story goes — a player type's "you're MINE" /
+               "no other man touches you", a jab at someone nobody has named ("after what she DID", "that piece of
+               shit"), a memory or sighting that never happened */
+            if (allowed && !isNarr && keptText) {
+              const before = keptText;
+              try { keptText = sceneKeepToThisStory(w, scene, resolvedId, keptText, promptTurns); } catch (error) { keptText = before; }
+              if (keptText !== before) console.info("[roleplay] line from another story removed", "character=" + String(resolvedId || ""), before.slice(0, 160));
             }
             if (allowed && !isNarr && !turnIsAction && keptText && sceneSpeechSelfThirdPerson(w, resolvedId, keptText)) {
               console.info("[roleplay] speech in which the speaker talks about themself in the third person removed", "character=" + String(resolvedId || ""), keptText.slice(0, 120));
