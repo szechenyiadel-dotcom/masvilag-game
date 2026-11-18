@@ -60,10 +60,10 @@ const task = (context, source, extra = {}) => ({ requestedProvider: "anthropic",
 test("DM reply and scene: Venice, the free OpenRouter Venice, Gemini; an unprompted DM starts on Gemini; comments and posts: Gemma, Gemini, free OpenRouter Venice, Groq, paid Venice last", () => {
   const { context } = gate(ENV, () => ok("x"));
   const order = (source, extra = {}) => Array.from(context.taskProviderOrder("anthropic", task(context, source, extra).body));
-  assert.deepEqual(order("dm", { foreground: true }), ["venice", "openrouter-dm-venice", "gemini"], "player-waiting dm: Venice first (R104/R105), the free OpenRouter Venice under it (R107)");
+  assert.deepEqual(order("dm", { foreground: true }), ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"], "player-waiting dm: Venice first (R104/R105), the free OpenRouter Venice under it (R107)");
   assert.deepEqual(order("dm"), ["gemini", "openrouter-dm-dolphin", "openrouter3", "openrouter-dm-venice", "groq", "groq2", "venice"], "unprompted dm: Gemini first, the free models, paid Venice last (R78/R105/R107)");
   for (const extra of [{}, { foreground: true }]) {
-    assert.deepEqual(order("scene", extra), ["venice", "openrouter-dm-venice", "gemini"], "scene " + JSON.stringify(extra));
+    assert.deepEqual(order("scene", extra), ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"], "scene " + JSON.stringify(extra));
   }
   /* Comments and posts, player-waiting or background: Gemma (free OpenRouter) -> every Gemini key -> the free OpenRouter
      Venice -> Groq -> paid Venice. */
@@ -191,7 +191,7 @@ test("An unprompted (background) DM starts on Gemini, uses free capacity (the fr
   assert.ok(!down.calls.some((provider) => ["openai", "mistral", "mistral2"].includes(provider)), "R78/R104: Venice is the only paid provider of a background DM: " + down.calls);
   const waiting = gate(ENV, (provider) => quota(provider));
   await waiting.context.executeAITask(task(waiting.context, "dm", { foreground: true }));
-  assert.deepEqual(Array.from(waiting.calls), ["venice", "openrouter-dm-venice", "gemini"]);
+  assert.deepEqual(Array.from(waiting.calls), ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"]);
 });
 
 test("A prose refusal from Venice falls through to the free OpenRouter Venice, and a refusal from that to Gemini, whose answer is used", async () => {
@@ -218,7 +218,7 @@ test("Venice is the first (and only paid) route of a DM reply and of a scene; th
   const order = (source) => Array.from(context.taskProviderOrder("anthropic", task(context, source, { foreground: true }).body));
   for (const source of ["dm", "scene"]) {
     const chain = order(source);
-    assert.deepEqual(chain, ["venice", "openrouter-dm-venice", "gemini"], source);
+    assert.deepEqual(chain, ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"], source);
     assert.ok(chain.indexOf("venice") < chain.indexOf("openrouter-dm-venice"), source + ": paid Venice before the free OpenRouter Venice");
     assert.deepEqual(chain.filter((provider) => PAID_PROVIDERS.has(provider)), ["venice"], source + ": Venice is the only paid one");
     for (const gone of ["mistral", "mistral2", "openai"]) assert.ok(!chain.includes(gone), source + " must not list " + gone);
@@ -688,7 +688,7 @@ test("When every provider that answered refused, the result is a 422 that says s
   assert.equal(result.status, 422);
   assert.notEqual(result.waiting, true);
   assert.equal(result.payload.error.type, "content_refused");
-  assert.deepEqual(Array.from(calls), ["venice", "openrouter-dm-venice", "gemini"]);
+  assert.deepEqual(Array.from(calls), ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"]);
   for (const provider of ["venice", "openrouter-dm-venice", "gemini"]) assert.equal(context.providerCooldownMs(provider), 0);
 });
 
@@ -823,9 +823,9 @@ test("proxy.js exposes the day's usage behind a session, and logs a line for eve
 test("The exact DM chain is not reordered even after repeated Venice refusals", async () => {
   const { context, calls } = gate(ENV, (provider) => (provider === "venice" ? text(provider, REFUSAL) : text(provider, '{"reply":"hi"}')));
   const order = () => Array.from(context.taskProviderOrder("anthropic", jsonBody("dm", { foreground: true })));
-  assert.deepEqual(order(), ["venice", "openrouter-dm-venice", "gemini"]);
+  assert.deepEqual(order(), ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"]);
   for (let i = 0; i < 4; i += 1) await context.executeAITask(jsonTask("dm", { foreground: true, messages: [{ role: "user", content: "write " + i }] }));
-  assert.deepEqual(order(), ["venice", "openrouter-dm-venice", "gemini"]);
+  assert.deepEqual(order(), ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"]);
   calls.length = 0;
   const result = await context.executeAITask(jsonTask("dm", { foreground: true, messages: [{ role: "user", content: "write again" }] }));
   assert.equal(result.ok, true);
@@ -952,7 +952,7 @@ test("Final routing (R104/R105/R107): OpenRouter runs free models only, key 2 th
   assert.match(source, /let result = await proxyOpenRouterFree\("openrouter3", model, body\);/, "Nemotron through the key-2-then-key-1 path too");
   assert.doesNotMatch(source, /proxyCompatibleMessage\("openrouter(?:3|-dm-dolphin|-dm-venice)"/, "no OpenRouter chat call bypasses proxyOpenRouterFree");
   assert.match(source, /raw = \["gemini", "openrouter-dm-dolphin", "openrouter3", "openrouter-dm-venice", "groq", "groq2", "venice"\]/, "an unprompted DM (R105/R107): Gemini first, the free models, Venice last");
-  assert.equal((source.match(/raw = \["venice", "openrouter-dm-venice", "gemini"\]/g) || []).length, 2, "DM reply and scene (R104/R107): direct Venice, the free OpenRouter Venice, then Gemini");
+  assert.equal((source.match(/raw = \["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"\]/g) || []).length, 2, "DM reply and scene (R104/R107): direct Venice, the free OpenRouter Venice, then Gemini");
   /* R104: no chain names OpenAI or Mistral any more */
   for (const line of source.match(/raw = \[[^\n]*\];/g) || []) {
     assert.doesNotMatch(line, /"openai"|"mistral2?"/, line);
