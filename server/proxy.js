@@ -5793,7 +5793,9 @@ function taskProviderOrder(requestedProvider, body) {
     /* A reply the player is waiting on (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2.
        The free Gemma slot is left out: it answered 429 to every one of its last 200 requests. */
     /* R107: the free OpenRouter Venice (uncensored) is the first net under the paid Venice role-play */
-    raw = ["venice", "openrouter-dm-venice", "gemini"];
+    raw = ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"];
+    /* R129 (owner's request): Groq 1 and 2 are the emergency net under everything — with Venice and Gemini out of
+       credit nobody answered at all. Groq refuses much adult content, but an ordinary line still gets written. */
   } else if (source === "popup" || source === "invite") {
     /* Popups and spontaneous Event invitations: free providers first. */
     /* R85 (owner's rule): popups never use a paid provider, not even when the player is waiting */
@@ -5804,7 +5806,8 @@ function taskProviderOrder(requestedProvider, body) {
   } else if (source === "scene") {
     /* Scenes (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2. */
     /* R107: the free OpenRouter Venice (uncensored) is the first net under the paid Venice role-play */
-    raw = ["venice", "openrouter-dm-venice", "gemini"];
+    raw = ["venice", "openrouter-dm-venice", "gemini", "groq", "groq2"];
+    /* R129: same emergency net for a scene */
   } else if (isComment) {
     /* Comments and posts (the owner's rule): Gemma (OpenRouter, free) -> every Gemini key and model -> paid OpenAI last.
        Groq 1 and 2 (free) sit before OpenAI as a safety net: with the free Gemma answering 429 and Gemini overloaded, a
