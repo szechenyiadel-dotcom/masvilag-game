@@ -56265,7 +56265,10 @@ if (action.type === "roleplay-initiate") {
     const bot = botId ? charById(view, botId) : null;
     if (!bot || isHuman(view, bot.id) || !canAiInitiateRoleplay(view) || !autonomousDmEligible(view, bot)) return null;
 
-    let out = await genRoleplayInitiation(view, bot);
+    /* R127: an AI that cannot answer right now does not cancel the invitation — the next try, and then the plain
+       invitation below, still bring it */
+    let out = null;
+    try { out = await genRoleplayInitiation(view, bot); } catch (inviteErr) { console.warn("AI Event invitation failed:", inviteErr); out = null; }
     if (!out || out.skip === true) {
       try {
         out = await genForcedEverydayRoleplayInvitation(view, bot);

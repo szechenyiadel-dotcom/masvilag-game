@@ -75,8 +75,11 @@ test("DM reply and scene: Venice, the free OpenRouter Venice, Gemini; an unpromp
   for (const source of ["notes", "autonomy-other", "group-chat"]) {
     assert.deepEqual(order(source), ["gemini", "openrouter3", "openrouter-dm-dolphin", "groq", "groq2", "venice"], source);
   }
-  /* Chores and popups never reach a paid provider. */
-  for (const source of ["meaning-analysis", "ambient-popup", "popup", "invite"]) {
+  /* Chores and popups never reach a paid provider; R127: an invitation (at most one a day) has paid Venice as its last net */
+  assert.equal(order("invite")[0], "gemini", "invite starts free");
+  for (const billed of ["mistral", "mistral2", "openai", "anthropic"]) assert.ok(!order("invite").includes(billed), "invite must not list " + billed);
+  assert.equal(order("invite").at(-1), "venice", "invite ends on Venice");
+  for (const source of ["meaning-analysis", "ambient-popup", "popup"]) {
     const background = order(source);
     for (const billed of ["venice", "mistral", "mistral2", "openai", "anthropic"]) assert.ok(!background.includes(billed), `${source} must not list ${billed}`);
   }

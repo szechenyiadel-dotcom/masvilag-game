@@ -5795,10 +5795,12 @@ function taskProviderOrder(requestedProvider, body) {
     /* R107: the free OpenRouter Venice (uncensored) is the first net under the paid Venice role-play */
     raw = ["venice", "openrouter-dm-venice", "gemini"];
   } else if (source === "popup" || source === "invite") {
-    /* Popups and spontaneous Event invitations: free providers first; paid Venice only when the player is
-       waiting on it (reroll / own answer). */
+    /* Popups and spontaneous Event invitations: free providers first. */
     /* R85 (owner's rule): popups never use a paid provider, not even when the player is waiting */
     raw = ["gemini", "groq", "groq2", "openrouter3"];
+    /* R127: with Gemini's daily quota spent and Groq at its limit no invitation was ever written ("I get no scene
+       invites"). An invitation is at most one a day, so it may fall back on paid Venice as the very last net. */
+    if (source === "invite") raw.push("venice");
   } else if (source === "scene") {
     /* Scenes (the owner's rule): the paid OpenRouter route first, then Mistral 1 and Mistral 2. */
     /* R107: the free OpenRouter Venice (uncensored) is the first net under the paid Venice role-play */
@@ -5840,7 +5842,7 @@ function taskProviderOrder(requestedProvider, body) {
     ),
     body,
     /* OpenAI is the last resort for what the world writes on its own, once every free provider has failed */
-    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, paidAllowed: paidBackgroundProviders(source, isGroqUtilitySource(source)), allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || isComment }
+    { freeGeminiKeyCount: GEMINI_FREE_KEYS.length, paidAllowed: paidBackgroundProviders(source, isGroqUtilitySource(source)), allowPaidBackground: AI_ALLOW_PAID_BACKGROUND || source === "dm" || source === "scene" || source === "invite" || isComment }
   );
 }
 
