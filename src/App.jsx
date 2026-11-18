@@ -51,13 +51,19 @@ const CSS = `
   --oxblood:var(--emerald-a); --gold:var(--absinthe); --rose:var(--poison); --steel:var(--neg);
   --bone:var(--text); --muted:var(--text-dim);
   position:fixed; inset:0; display:flex; flex-direction:column;
+  /* R120: an app screen — it never slides sideways or bounces, double-tap never zooms */
+  overflow:hidden; overscroll-behavior:none; touch-action:manipulation;
   background:var(--bg-glow), var(--bg);
   color:var(--text); font-family:var(--sans); font-size:15px; line-height:1.5;
 }
 .mv-wrap { width:100%; max-width:560px; margin:0 auto; flex:1; display:flex; flex-direction:column; min-height:0; }
 /* R109: no -webkit-overflow-scrolling here — on iPhone it trapped every full-screen layer (editor, composer, popups)
    inside the main column; iOS scrolls with momentum without it */
-.mv-main { flex:1; overflow-y:auto; padding:0 14px 90px; }
+.mv-main { flex:1; overflow-y:auto; overflow-x:hidden; overscroll-behavior-y:contain; padding:0 14px 90px; }
+/* R120: iPhone zooms into any text field under 16px when it is tapped — on a touch screen every field is 16px */
+@media (pointer:coarse) {
+  .mv input:not([type=range]):not([type=checkbox]):not([type=radio]), .mv textarea, .mv select, .mv [contenteditable=true] { font-size:16px !important; }
+}
 .mv-main::-webkit-scrollbar { width:6px; }
 .mv-main::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px; }
 

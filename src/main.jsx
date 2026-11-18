@@ -5,6 +5,24 @@ import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 
+/* R120: the phone screen stays put like an app — no pinch zoom (double-tap zoom is off through touch-action in CSS), and after the keyboard closes the
+   page snaps back instead of staying slid up. */
+(function lockMobileScreen() {
+  if (typeof window === "undefined") return;
+  const stop = (e) => { if (e.cancelable) e.preventDefault(); };
+  ["gesturestart", "gesturechange", "gestureend"].forEach((type) => document.addEventListener(type, stop, { passive: false }));
+  document.addEventListener("touchmove", (e) => { if (e.touches && e.touches.length > 1) stop(e); }, { passive: false });
+  const isField = (el) => Boolean(el && el.matches && el.matches("input, textarea, select, [contenteditable=true]"));
+  document.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (isField(document.activeElement)) return;
+      if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }, 60);
+  });
+})();
+
 /* New-version notice: an open tab (especially on a phone) keeps running the old
    code after a deploy. Every 2 minutes we compare the deployed bundle with the
    running one and offer a one-tap reload. */
