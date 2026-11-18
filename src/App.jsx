@@ -16230,14 +16230,61 @@ function sharedPastEvidence(w, speakerId, otherIds, days = 10) {
   return false;
 }
 
+/* R124: claims of something seen or done ("I keep catching Nam-gyu staring at you", "don't think I didn't notice",
+   "during the last sparring session", "when I had you pinned against the locker") */
+const CLAIMED_OBSERVATION_RE = /\b(?:i (?:keep|kept) (?:catching|seeing|noticing|hearing)|i (?:saw|caught|watched|noticed|heard) (?:you|u|him|her|them|the way|how)|don'?t think i (?:didn'?t|did not) (?:notice|see)|(?:during|at|after) (?:the|that|our|your) last\b|when i had you|the way you (?:looked|stared|kissed|moaned|grabbed)|(?:last night|yesterday|this morning|earlier today|the other (?:night|day))\b)|(?:l[aá]ttalak|l[aá]ttam,? (?:hogy|ahogy)|[eé]szrevettem|kisz[uú]rtam|tegnap|m[uú]lt [eé]jjel|ma reggel)/i;
+const CLAIM_STOPWORDS = new Set("about after again against always another anyone anything around because before being better between could didn't doesn't don't every everyone everything going gonna gotta having keep kept know knows least maybe might never night nothing other people pretty really right should since something still sure their there these thing things think those though through today tonight under until wanna watch where which while would yesterday you're you've yourself myself baby babe honey morning earlier remember noticed notice catching seeing noticing hearing think thought that's what's there's it's he's she's last time when what with that this have just like your from they them were been will also even much more some very only back over then than into well".split(" "));
+function claimContentWords(w, sentence) {
+  const names = new Set();
+  (w && w.chars || []).forEach((c) => [c && c.name, c && c.nick, c && c.username].filter(Boolean).forEach((n) => String(n).toLowerCase().split(/[^\p{L}\p{N}]+/u).forEach((x) => x && names.add(x))));
+  return [...new Set(String(sentence || "").toLowerCase().replace(/[’']/g, "'").split(/[^\p{L}']+/u)
+    .map((x) => x.replace(/^'+|'+$/g, "").replace(/'s$/, ""))
+    .filter((x) => x.length >= 5 && !CLAIM_STOPWORDS.has(x) && !names.has(x)))];
+}
+/* everything that really happened recently between these people (and in public), as one lowercase text */
+function recordedRealityText(w, speakerId, otherIds, days = 14) {
+  if (!w) return "";
+  const since = now() - days * 24 * 3600 * 1000;
+  const ids = [String(speakerId || ""), ...(otherIds || []).filter(Boolean).map(String)];
+  const out = [];
+  const push = (t) => { if (t) out.push(String(t)); };
+  (w.socialEvents || []).slice(0, 400).forEach((e) => { if (e && Number(e.ts) >= since) push(e.text); });
+  (w.posts || []).slice(0, 300).forEach((p) => { if (!p || Number(p.ts) < since) return; push(p.text); push(p.imageDescription); (p.comments || []).forEach((c) => push(c && c.text)); });
+  Object.entries(w.chats || {}).forEach(([key, msgs]) => { if (ids.some((id) => key.includes(id))) (msgs || []).slice(-80).forEach((m) => { if (m && Number(m.ts || since) >= since) push(m.text); }); });
+  (w.groups || []).forEach((g) => { if (g && (g.members || []).some((m) => ids.includes(String(m)))) (g.msgs || []).slice(-80).forEach((m) => push(m && m.text)); });
+  (w.scenes || []).forEach((sc) => { if (sc && (sc.cast || []).some((m) => ids.includes(String(m)))) { push(sc.title); push(sc.premise); (sc.turns || []).slice(-60).forEach((t) => push(t && t.text)); } });
+  ids.forEach((id) => { const c = charById(w, id); if (c) Object.values(c).forEach((v) => { if (typeof v === "string" && v.length < 60000 && !/^data:/.test(v)) push(v); }); });
+  return out.join("\n").toLowerCase();
+}
+/* a claim is grounded when its distinctive words were really written somewhere in play (a short stem is enough:
+   "sparring" ~ "spar", "pinned" ~ "pin…") */
+function claimGroundedIn(reality, words) {
+  const missing = words.filter((x) => !reality.includes(x.slice(0, Math.max(4, Math.min(x.length, 6)))));
+  return missing.length < 2 && !(missing.length === 1 && words.length <= 2);
+}
+
 function stripInventedSharedPast(w, speakerId, text, otherIds) {
   const value = String(text || "");
-  if (!value || !(INVENTED_PAST_EN_RE.test(value) || INVENTED_PAST_HU_RE.test(value))) return value;
-  if (sharedPastEvidence(w, speakerId, otherIds)) return value;
+  if (!value) return value;
+  const pastHit = INVENTED_PAST_EN_RE.test(value) || INVENTED_PAST_HU_RE.test(value);
+  const claimHit = CLAIMED_OBSERVATION_RE.test(value);
+  if (!pastHit && !claimHit) return value;
   const parts = value.split(/(?<=[.!?…])\s+/);
-  const kept = parts.filter((part) => !(INVENTED_PAST_EN_RE.test(part) || INVENTED_PAST_HU_RE.test(part))).join(" ").trim();
-  console.info("[invented-past] removed a claim with no trace in play or on the sheet", "character=" + String(speakerId || ""), value.slice(0, 160));
-  return kept;
+  const evidence = sharedPastEvidence(w, speakerId, otherIds);
+  let reality = null;
+  const kept = parts.filter((part) => {
+    const isPast = INVENTED_PAST_EN_RE.test(part) || INVENTED_PAST_HU_RE.test(part);
+    const isClaim = CLAIMED_OBSERVATION_RE.test(part);
+    if (!isPast && !isClaim) return true;
+    if (isPast && !evidence) return false;
+    /* R124: even with some shared history, the concrete details of the claim must be on record */
+    if (reality === null) reality = recordedRealityText(w, speakerId, otherIds);
+    return claimGroundedIn(reality, claimContentWords(w, part));
+  });
+  let result = kept.join(" ").trim();
+  if (result !== value.trim() && !/\p{L}/u.test(result)) result = "";
+  if (result !== value.trim()) console.info("[invented-past] removed a claim with no trace in play or on the sheet", "character=" + String(speakerId || ""), value.slice(0, 160));
+  return result === value.trim() ? value : result;
 }
 
 function sanitizePhoneDm(
@@ -38712,7 +38759,8 @@ function LegacyGroundedChat({ w, update, setErr, openId, setOpenId, jump, noteRe
       requestWorld.meId
     );
 
-    const out = await askDirectDmJSONInteractive(
+    /* R124: the call is kept as a function so a reply that was only an invented memory can be asked again once */
+    const askThisDm = (realityNote = "") => askDirectDmJSONInteractive(
       requestWorld,
       engineFor(requestWorld),
       `${worldContext(
@@ -38956,9 +39004,10 @@ KAPCSOLATVÁLTOZÁS:
 - Egyoldalú titkos érzésnél használhatsz "oneSided":true mezőt.
 
 Formátum:
-{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}`
+{"reply":"a válaszod vagy üres, ha csak képet küldesz","image":"","imagePrompt":"rövid ÚJ generált snap/selfie leírása vagy üres","relationshipImpact":false,"changes":[],"roleplayBridge":{"activate":false,"kind":"private_meet vagy arrival vagy party vagy training vagy team_event vagy group_social","title":"","setting":"","goal":"","cast":[],"openingKind":"speech vagy action","opening":""}}${TAIL}${realityNote}`
     , { maxTries: 1, maxTokens: 650, timeoutMs: 50000, dmCharId: c.id, dmChatKey: ck, dmLatestText: t }
     );
+    const out = await askThisDm();
 
     const requestedReplyRaw = String(
       out && out.reply !== undefined
@@ -39071,6 +39120,22 @@ Formátum:
         t,
         reply
       );
+
+    /* R124: everything in the answer was a memory or sighting that never happened — ask once more, grounded */
+    if (!reply && !aiImageRef && requestedReplyText && !dmRoleplayMode(t)) {
+      try {
+        const en = worldLanguage(requestWorld, requestWorld.meId) === "en";
+        const again = await askThisDm(en
+          ? "\n\nREALITY CHECK: your previous answer claimed things that never happened (a memory, something you saw, an event). Answer again using ONLY what is in this chat and the recorded history above — react to " + (requestWorld.player && requestWorld.player.name || "them") + "'s last message, in your own voice."
+          : "\n\nVALÓSÁG: az előző válaszod olyat állított, ami nem történt meg (emlék, amit láttál, esemény). Válaszolj újra CSAK abból, ami ebben a chatben és a fenti előzményekben ténylegesen szerepel — a legutóbbi üzenetre reagálj, a saját hangodon.");
+        const raw2 = String(again && again.reply !== undefined ? again.reply : "").trim();
+        let second = keepFakeDatingLane(w, c.id, w.meId, stripSocialRoleplayNarration(w, c.id, raw2));
+        second = enforceChatEmojiVariety(requestWorld, c.id, second);
+        second = sanitizePhoneDm(requestWorld, c.id, second, hist, { roleplay: false });
+        second = sanitizeUnjustifiedColdDm(requestWorld, c.id, t, second);
+        if (second) reply = second;
+      } catch (error) { console.warn("[invented-past] grounded retry failed", error); }
+    }
 
     if (
       explicitImageRequest &&
@@ -45291,6 +45356,77 @@ VÁLASZ CSAK JSON:
   );
 }
 
+/* R123: a gossip / news post says only what is true in the game.
+   - a fake-dating pair stays a real couple in public: no "fake boyfriend", no "it began as a ruse"
+   - nobody is called someone's ex unless the two really have an ex bond
+   - nobody is put into a dojo / gang / team they do not belong to ("Iron Dragons member Brent")
+   The sentence that breaks one of these goes; if most of the post goes, the post is not published. */
+const GOSSIP_FAKE_REVEAL_RE = /\b(?:fake|faking|faked|pretend\w*|ruse|sham|scheme|for show|staged|just an act|an act\b|arrangement|not real|isn'?t real|wasn'?t real|cover[- ]?story|publicity stunt)\b|kamu|színlel|álkapcsolat|megjátsz|csak játsz/i;
+const GOSSIP_EX_LABEL_RE = /\bex(?:es)?\b|\bex[- ](?:flame|boyfriend|girlfriend|bf|gf|lover|partner|husband|wife)\b|\bformer (?:flame|lover|boyfriend|girlfriend|partner)\b|\bused to date\b|\bold flame\b|exbar[aá]t|exe\b|volt (?:pasij|barátnőj|szerelm)/i;
+function gossipPairIsEx(w, a, b) {
+  const label = (r) => [r && r.bond, r && r.type, r && r.label, r && r.role, r && r.status, ...((r && Array.isArray(r.layers)) ? r.layers : [])].filter(Boolean).join(" ");
+  const text = label(getRel(w, a, b)) + " " + label(getRel(w, b, a));
+  return /\bex\b|ex[- ]|former|used to date|volt (?:pár|barát|szerelm)|exbar[aá]t|szakítot/i.test(text);
+}
+function groundPublicGossip(w, text, headline = "") {
+  const value = String(text || "");
+  if (!w || !value.trim()) return { text: value, headline, removed: 0 };
+  const named = (part) => { try { return namedPeopleInText(w, part, "").filter((id) => charById(w, id)); } catch (error) { return []; } };
+  const everyone = named(value + " " + headline);
+  const inFakePair = new Set();
+  everyone.forEach((id) => (w.chars || []).forEach((c) => {
+    if (!c || c.id === id) return;
+    try { if (fakeDatingBehaviorCard(w, id, c.id) || fakeDatingBehaviorCard(w, c.id, id)) inFakePair.add(id); } catch (error) { /* ignore */ }
+  }));
+  const norm = (x) => String(x || "").toLowerCase().replace(/[^\p{L}\p{N} ]+/gu, " ").replace(/\s+/g, " ").trim();
+  const groupsOf = (id) => { let d = null; try { d = identityCanonFor(w, id); } catch (error) { d = null; } return d ? new Set([d.group, ...((d.affiliations || []).map((a) => a && a.name))].map(norm).filter(Boolean)) : null; };
+  const allGroups = new Set();
+  (w.chars || []).forEach((c) => { const g = c && groupsOf(c.id); if (g) g.forEach((x) => x.length >= 4 && allGroups.add(x)); });
+  const why = (part) => {
+    const ids = named(part);
+    if (GOSSIP_FAKE_REVEAL_RE.test(part) && inFakePair.size) return "fake-dating-reveal";
+    if (GOSSIP_EX_LABEL_RE.test(part)) {
+      const pairs = [];
+      ids.forEach((a, i) => ids.slice(i + 1).forEach((b) => pairs.push([a, b])));
+      if (!pairs.some(([a, b]) => gossipPairIsEx(w, a, b))) return "invented-ex";
+    }
+    const low = norm(part);
+    for (const g of allGroups) {
+      if (!low.includes(g)) continue;
+      for (const id of ids) {
+        const c = charById(w, id);
+        const mine = groupsOf(id);
+        if (!c || !mine || !mine.size || mine.has(g)) continue;
+        const names = [c.name, String(c.name || "").split(/\s+/)[0], String(c.name || "").split(/\s+/).slice(-1)[0], nicknameInfo(c.nick).name].map(norm).filter((n) => n.length >= 3);
+        const near = names.some((n) => new RegExp("\\b" + g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?: [\\p{L}'-]+){0,3} " + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b|\\b" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?: [\\p{L}'-]+){0,4} " + g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "u").test(low));
+        if (near) return "wrong-group";
+      }
+    }
+    return "";
+  };
+  let total = 0, removed = 0;
+  const lines = value.split(/\n/).map((line) => {
+    if (!line.trim()) return line;
+    const parts = line.split(/(?<=[.!?…])\s+/);
+    const kept = parts.filter((part) => {
+      if (!part.trim()) return false;
+      total++;
+      const reason = why(part);
+      if (!reason) return true;
+      removed++;
+      console.info("[gossip-ground] removed", reason, part.slice(0, 160));
+      return false;
+    });
+    return kept.join(" ");
+  });
+  const out = lines.map((line) => (line.trim() ? keepFakeDatingSecretInPublic(line) : line)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  let head = String(headline || "");
+  if (head && why(head)) head = "";
+  head = keepFakeDatingSecretInPublic(head);
+  if (!out || (total && removed * 2 > total)) return null;
+  return { text: out, headline: head, removed };
+}
+
 function normalizeGossipStoryOutput(
   candidate,
   out
@@ -45440,6 +45576,17 @@ function publishGossipMediaStory(
   if (!out) {
     return null;
   }
+
+  /* R123: only what is true in the game reaches the feed */
+  try {
+    const grounded = groundPublicGossip(w, out.text, out.headline);
+    if (!grounded) {
+      reportClientDiag("gossip-drop", { reason: "ungrounded", text: String(out.text || "").slice(0, 160) });
+      return null;
+    }
+    out.text = grounded.text;
+    out.headline = grounded.headline;
+  } catch (error) { console.warn("[gossip-ground] check failed", error); }
 
   /*
    * HARD GOSSIP REPETITION FILTER:
